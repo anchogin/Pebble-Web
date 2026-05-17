@@ -4,7 +4,8 @@ use axum::{
     extract::{Path, Query, State},
     Json,
 };
-use pebble_core::{Message, MessageSummary};
+use lol_html::{element, HtmlRewriter, Settings};
+use pebble_core::{Message, MessageSummary, PrivacyMode, RenderedHtml};
 use rusqlite::OptionalExtension;
 use serde::Deserialize;
 use serde_json::json;
@@ -26,7 +27,8 @@ pub async fn list_messages_by_folder(
 
     let messages = store
         .with_read_async(move |conn| {
-            let sql = "SELECT m.id, m.account_id, m.remote_id, m.message_id_header, m.in_reply_to, \
+            let sql =
+                "SELECT m.id, m.account_id, m.remote_id, m.message_id_header, m.in_reply_to, \
                  m.references_header, m.thread_id, m.subject, m.snippet, m.from_address, \
                  m.from_name, m.to_list, m.cc_list, m.bcc_list, \
                  m.has_attachments, m.is_read, m.is_starred, m.is_draft, \
@@ -281,14 +283,150 @@ pub async fn delete_message(
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrivacyModeRequest {
-    #[allow(dead_code)]
-    pub privacy_mode: Option<String>,
+    pub privacy_mode: Option<PrivacyMode>,
+}
+
+fn should_load_remote_content(mode: &PrivacyMode, sender: Option<&str>) -> bool {
+    match mode {
+        PrivacyMode::Off | PrivacyMode::LoadOnce => true,
+        PrivacyMode::Strict => false,
+        PrivacyMode::TrustSender(trusted) => sender
+            .map(|sender| sender.eq_ignore_ascii_case(trusted))
+            .unwrap_or(false),
+    }
+}
+
+fn is_remote_resource_url(url: &str) -> bool {
+    let trimmed = url.trim().to_ascii_lowercase();
+    trimmed.starts_with("http://") || trimmed.starts_with("https://") || trimmed.starts_with("//")
+}
+
+fn render_email_html_for_privacy(
+    html: &str,
+    mode: PrivacyMode,
+    sender: Option<&str>,
+) -> Result<RenderedHtml, String> {
+    if should_load_remote_content(&mode, sender) {
+        return Ok(RenderedHtml {
+            html: html.to_string(),
+            trackers_blocked: Vec::new(),
+            images_blocked: 0,
+        });
+    }
+
+    let mut output = Vec::with_capacity(html.len());
+    let mut images_blocked = 0u32;
+    let mut rewriter = HtmlRewriter::new(
+        Settings {
+            element_content_handlers: vec![element!("img", |el| {
+                let mut blocked_src = None;
+                if let Some(src) = el.get_attribute("src") {
+                    if is_remote_resource_url(&src) {
+                        blocked_src = Some(src);
+                        el.remove_attribute("src");
+                    }
+                }
+                if let Some(srcset) = el.get_attribute("srcset") {
+                    if srcset.split(',').any(is_remote_resource_url) {
+                        if blocked_src.is_none() {
+                            blocked_src = Some(srcset);
+                        }
+                        el.remove_attribute("srcset");
+                    }
+                }
+                if let Some(src) = blocked_src {
+                    images_blocked += 1;
+                    el.set_attribute("data-pebble-blocked-src", &src)?;
+                    el.set_attribute("class", "blocked-image")?;
+                    el.set_attribute("alt", "Remote image blocked")?;
+                }
+                Ok(())
+            })],
+            ..Settings::default()
+        },
+        |chunk: &[u8]| output.extend_from_slice(chunk),
+    );
+
+    rewriter
+        .write(html.as_bytes())
+        .map_err(|e| format!("Failed to rewrite HTML: {e}"))?;
+    rewriter
+        .end()
+        .map_err(|e| format!("Failed to finish HTML rewrite: {e}"))?;
+
+    Ok(RenderedHtml {
+        html: String::from_utf8(output)
+            .map_err(|e| format!("Rewritten HTML was not valid UTF-8: {e}"))?,
+        trackers_blocked: Vec::new(),
+        images_blocked,
+    })
+}
+
+#[cfg(test)]
+mod privacy_tests {
+    use super::{render_email_html_for_privacy, PrivacyModeRequest};
+    use pebble_core::PrivacyMode;
+
+    #[test]
+    fn strict_privacy_blocks_remote_images() {
+        let rendered = render_email_html_for_privacy(
+            r#"<p>hi</p><img src="https://tracker.example/p.gif"><img src="cid:inline-1">"#,
+            PrivacyMode::Strict,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(rendered.images_blocked, 1);
+        assert!(!rendered
+            .html
+            .contains(r#" src="https://tracker.example/p.gif""#));
+        assert!(rendered.html.contains("cid:inline-1"));
+        assert!(rendered.html.contains("data-pebble-blocked-src"));
+    }
+
+    #[test]
+    fn off_privacy_allows_remote_images() {
+        let rendered = render_email_html_for_privacy(
+            r#"<img src="https://cdn.example/image.png">"#,
+            PrivacyMode::Off,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(rendered.images_blocked, 0);
+        assert!(rendered.html.contains("https://cdn.example/image.png"));
+    }
+
+    #[test]
+    fn trust_sender_allows_matching_sender() {
+        let rendered = render_email_html_for_privacy(
+            r#"<img src="https://cdn.example/image.png">"#,
+            PrivacyMode::TrustSender("sender@example.com".to_string()),
+            Some("sender@example.com"),
+        )
+        .unwrap();
+
+        assert_eq!(rendered.images_blocked, 0);
+        assert!(rendered.html.contains("https://cdn.example/image.png"));
+    }
+
+    #[test]
+    fn privacy_mode_request_accepts_camel_case_body() {
+        let request: PrivacyModeRequest =
+            serde_json::from_str(r#"{"privacyMode":{"TrustSender":"sender@example.com"}}"#)
+                .unwrap();
+
+        assert!(matches!(
+            request.privacy_mode,
+            Some(PrivacyMode::TrustSender(sender)) if sender == "sender@example.com"
+        ));
+    }
 }
 
 pub async fn get_message_with_html(
     State(state): State<AppStateRef>,
     Path(message_id): Path<String>,
-    Json(_body): Json<PrivacyModeRequest>,
+    Json(body): Json<PrivacyModeRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let store = state.store.clone();
 
@@ -354,13 +492,25 @@ pub async fn get_message_with_html(
 
     match result {
         Some((msg, html_raw)) => {
+            let mut privacy_mode = body.privacy_mode.unwrap_or(PrivacyMode::Strict);
+            if matches!(privacy_mode, PrivacyMode::Strict) {
+                if let Ok(Some(_trust)) = state
+                    .store
+                    .is_trusted_sender(&msg.account_id, &msg.from_address)
+                {
+                    privacy_mode = PrivacyMode::LoadOnce;
+                }
+            }
+            let rendered =
+                render_email_html_for_privacy(&html_raw, privacy_mode, Some(&msg.from_address))
+                    .map_err(|e| ApiError::Internal(format!("Failed to render html: {e}")))?;
             let msg_json = serde_json::to_value(msg)
                 .map_err(|e| ApiError::Internal(format!("Failed to serialize message: {e}")))?;
             let html_part = json!({
-                "html": html_raw,
+                "html": rendered.html,
                 "loadedRemoteContent": false,
-                "trackers_blocked": [],
-                "images_blocked": 0
+                "trackers_blocked": rendered.trackers_blocked,
+                "images_blocked": rendered.images_blocked
             });
             Ok(Json(json!([msg_json, html_part])))
         }
@@ -371,21 +521,24 @@ pub async fn get_message_with_html(
 pub async fn render_html(
     State(state): State<AppStateRef>,
     Path(message_id): Path<String>,
-    Json(_body): Json<PrivacyModeRequest>,
+    Json(body): Json<PrivacyModeRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let store = state.store.clone();
 
     let result = store
         .with_read_async(move |conn| {
-            let sql = "SELECT body_html_raw FROM messages WHERE id = ?1";
+            let sql = "SELECT account_id, from_address, body_html_raw FROM messages WHERE id = ?1";
             let row_result = conn
                 .query_row(sql, rusqlite::params![message_id], |row| {
-                    let html: String = row.get(0)?;
-                    Ok(html)
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
                 })
                 .optional();
             match row_result {
-                Ok(Some(html)) => Ok(Some(html)),
+                Ok(Some(data)) => Ok(Some(data)),
                 Ok(None) => Ok(None),
                 Err(e) => Err(pebble_core::PebbleError::Storage(e.to_string())),
             }
@@ -394,12 +547,23 @@ pub async fn render_html(
         .map_err(|e| ApiError::Internal(format!("Failed to render html: {e}")))?;
 
     match result {
-        Some(html) => Ok(Json(json!({
-            "html": html,
-            "loadedRemoteContent": false,
-            "trackers_blocked": [],
-            "images_blocked": 0
-        }))),
+        Some((account_id, from_address, html)) => {
+            let mut privacy_mode = body.privacy_mode.unwrap_or(PrivacyMode::Strict);
+            if matches!(privacy_mode, PrivacyMode::Strict) {
+                if let Ok(Some(_trust)) = state.store.is_trusted_sender(&account_id, &from_address)
+                {
+                    privacy_mode = PrivacyMode::LoadOnce;
+                }
+            }
+            let rendered = render_email_html_for_privacy(&html, privacy_mode, Some(&from_address))
+                .map_err(|e| ApiError::Internal(format!("Failed to render html: {e}")))?;
+            Ok(Json(json!({
+                "html": rendered.html,
+                "loadedRemoteContent": false,
+                "trackers_blocked": rendered.trackers_blocked,
+                "images_blocked": rendered.images_blocked
+            })))
+        }
         None => Err(ApiError::NotFound("Message not found".to_string())),
     }
 }
@@ -492,7 +656,8 @@ pub async fn list_starred_messages(
 
     let messages = store
         .with_read_async(move |conn| {
-            let sql = "SELECT m.id, m.account_id, m.remote_id, m.message_id_header, m.in_reply_to, \
+            let sql =
+                "SELECT m.id, m.account_id, m.remote_id, m.message_id_header, m.in_reply_to, \
                  m.references_header, m.thread_id, m.subject, m.snippet, m.from_address, \
                  m.from_name, m.to_list, m.cc_list, m.bcc_list, \
                  m.has_attachments, m.is_read, m.is_starred, m.is_draft, \
@@ -679,10 +844,8 @@ pub async fn batch_delete(
                     "DELETE FROM message_folders WHERE message_id = ?1",
                     rusqlite::params![id],
                 )?;
-                let affected = tx.execute(
-                    "DELETE FROM messages WHERE id = ?1",
-                    rusqlite::params![id],
-                )?;
+                let affected =
+                    tx.execute("DELETE FROM messages WHERE id = ?1", rusqlite::params![id])?;
                 total += affected;
             }
             tx.commit()?;

@@ -8,9 +8,7 @@ use pebble_store::labels::Label;
 use rusqlite::OptionalExtension;
 use serde::Deserialize;
 
-pub async fn list_labels(
-    State(state): State<AppStateRef>,
-) -> Result<Json<Vec<Label>>, ApiError> {
+pub async fn list_labels(State(state): State<AppStateRef>) -> Result<Json<Vec<Label>>, ApiError> {
     let labels = state
         .store
         .list_labels()
@@ -66,16 +64,43 @@ pub async fn delete_label(
                 "DELETE FROM message_labels WHERE label_id = ?1",
                 rusqlite::params![id],
             )?;
-            conn.execute(
-                "DELETE FROM labels WHERE id = ?1",
-                rusqlite::params![id],
-            )?;
+            conn.execute("DELETE FROM labels WHERE id = ?1", rusqlite::params![id])?;
             Ok(())
         })
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to delete label: {e}")))?;
 
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchLabelRequest {
+    pub message_ids: Vec<String>,
+}
+
+pub async fn get_message_labels(
+    State(state): State<AppStateRef>,
+    Path(message_id): Path<String>,
+) -> Result<Json<Vec<Label>>, ApiError> {
+    let labels = state
+        .store
+        .get_message_labels(&message_id)
+        .map_err(|e| ApiError::Internal(format!("Failed to get message labels: {e}")))?;
+
+    Ok(Json(labels))
+}
+
+pub async fn get_message_labels_batch(
+    State(state): State<AppStateRef>,
+    Json(body): Json<BatchLabelRequest>,
+) -> Result<Json<std::collections::HashMap<String, Vec<Label>>>, ApiError> {
+    let labels = state
+        .store
+        .get_message_labels_batch(&body.message_ids)
+        .map_err(|e| ApiError::Internal(format!("Failed to get message labels: {e}")))?;
+
+    Ok(Json(labels))
 }
 
 #[derive(Deserialize)]
@@ -104,12 +129,16 @@ pub async fn add_label_to_message(
                         |row| row.get(0),
                     )
                     .optional()?;
-                id.ok_or_else(|| pebble_core::PebbleError::Storage(format!("Label not found: {name}")))
+                id.ok_or_else(|| {
+                    pebble_core::PebbleError::Storage(format!("Label not found: {name}"))
+                })
             })
             .await
             .map_err(|e| ApiError::NotFound(format!("Label not found: {e}")))?
     } else {
-        return Err(ApiError::BadRequest("label_id or label_name is required".to_string()));
+        return Err(ApiError::BadRequest(
+            "label_id or label_name is required".to_string(),
+        ));
     };
 
     store
@@ -177,7 +206,9 @@ pub async fn remove_label_from_message(
                     Ok(())
                 })
                 .await
-                .map_err(|e| ApiError::Internal(format!("Failed to remove label from message: {e}")))?;
+                .map_err(|e| {
+                    ApiError::Internal(format!("Failed to remove label from message: {e}"))
+                })?;
         }
     }
 

@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use pebble_core::ProviderType;
 use pebble_crypto::CryptoService;
-use pebble_mail::{ConnectionSecurity, ImapConfig, ImapMailProvider, SyncConfig, SyncTrigger, SyncWorker};
+use pebble_mail::{
+    ConnectionSecurity, ImapConfig, ImapMailProvider, SyncConfig, SyncTrigger, SyncWorker,
+};
 use pebble_store::Store;
 use tokio::sync::{broadcast, mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
@@ -188,16 +190,6 @@ impl SyncManager {
         );
 
         Ok(())
-    }
-
-    /// Stop all running sync workers.
-    pub async fn stop_all(&self) {
-        let mut handles = self.handles.lock().await;
-        for (account_id, handle) in handles.drain() {
-            info!("Stopping sync for account {}", account_id);
-            let _ = handle.stop_tx.send(true);
-            handle.task.abort();
-        }
     }
 }
 

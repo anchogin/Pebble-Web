@@ -17,11 +17,11 @@ impl Config {
         let jwt_secret = std::env::var("PEBBLE_JWT_SECRET")
             .map_err(|_| "PEBBLE_JWT_SECRET env var is required".to_string())?;
 
-        if jwt_secret == "change-this-to-a-random-string" || jwt_secret == "generate-a-random-string-here" {
+        if is_insecure_jwt_secret(&jwt_secret) {
             return Err("PEBBLE_JWT_SECRET must be changed from the default value".to_string());
         }
 
-        if password == "changeme" {
+        if is_insecure_default_password(&password) {
             return Err("PEBBLE_PASSWORD must be changed from the default value".to_string());
         }
 
@@ -30,9 +30,8 @@ impl Config {
             .parse::<u16>()
             .map_err(|e| format!("Invalid PEBBLE_PORT: {e}"))?;
 
-        let data_dir = PathBuf::from(
-            std::env::var("PEBBLE_DATA_DIR").unwrap_or_else(|_| "/data".to_string()),
-        );
+        let data_dir =
+            PathBuf::from(std::env::var("PEBBLE_DATA_DIR").unwrap_or_else(|_| "/data".to_string()));
 
         let sync_interval_secs = std::env::var("PEBBLE_SYNC_INTERVAL")
             .unwrap_or_else(|_| "300".to_string())
@@ -65,5 +64,46 @@ impl Config {
 
     pub fn key_file_path(&self) -> PathBuf {
         self.data_dir.join("encryption.key")
+    }
+}
+
+fn is_insecure_default_password(password: &str) -> bool {
+    matches!(password.trim(), "changeme" | "your-password-here")
+}
+
+fn is_insecure_jwt_secret(secret: &str) -> bool {
+    let trimmed = secret.trim();
+    matches!(
+        trimmed,
+        "change-this-to-a-random-string"
+            | "generate-a-random-string-here"
+            | "your-random-secret-at-least-32-chars"
+    ) || trimmed.len() < 32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_insecure_default_password, is_insecure_jwt_secret};
+
+    #[test]
+    fn rejects_documented_placeholder_passwords() {
+        assert!(is_insecure_default_password("changeme"));
+        assert!(is_insecure_default_password("your-password-here"));
+        assert!(!is_insecure_default_password(
+            "correct horse battery staple"
+        ));
+    }
+
+    #[test]
+    fn rejects_documented_placeholder_or_short_jwt_secrets() {
+        assert!(is_insecure_jwt_secret("change-this-to-a-random-string"));
+        assert!(is_insecure_jwt_secret("generate-a-random-string-here"));
+        assert!(is_insecure_jwt_secret(
+            "your-random-secret-at-least-32-chars"
+        ));
+        assert!(is_insecure_jwt_secret("short-secret"));
+        assert!(!is_insecure_jwt_secret(
+            "this-is-a-real-secret-with-32-plus-chars"
+        ));
     }
 }

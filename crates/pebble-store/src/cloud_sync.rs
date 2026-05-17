@@ -13,6 +13,7 @@ pub const MAX_BACKUP_SIZE_BYTES: usize = 16 * 1024 * 1024;
 /// Highest backup schema version this build understands.
 pub const BACKUP_SCHEMA_VERSION: u32 = 1;
 pub const SETTINGS_BACKUP_FILENAME: &str = "pebble-settings-backup.json";
+pub const KANBAN_CONTEXT_NOTES_KEY: &str = "kanban_context_notes";
 
 fn validate_backup_payload_shape(data: &[u8]) -> Result<()> {
     let data = data.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(data);
@@ -263,6 +264,15 @@ impl Store {
 
         let rules = self.list_rules()?;
         let kanban_cards = self.list_kanban_cards(None)?;
+        let kanban_context_notes = self
+            .get_secure_user_data(KANBAN_CONTEXT_NOTES_KEY)?
+            .map(|bytes| {
+                serde_json::from_slice(&bytes).map_err(|e| {
+                    PebbleError::Storage(format!("Invalid kanban context notes JSON: {e}"))
+                })
+            })
+            .transpose()?
+            .unwrap_or_default();
         // Redact translate config — never export API keys or encrypted secrets
         let translate_config = self.get_translate_config()?.map(|mut tc| {
             tc.config = String::new();
@@ -275,7 +285,7 @@ impl Store {
             accounts: account_backups,
             rules,
             kanban_cards,
-            kanban_context_notes: HashMap::new(),
+            kanban_context_notes,
             translate_config,
         };
 
@@ -379,6 +389,23 @@ impl Store {
             for card in &backup.kanban_cards {
                 Self::upsert_kanban_card_with_conn(&tx, card)?;
             }
+
+            let notes_json = serde_json::to_vec(&backup.kanban_context_notes).map_err(|e| {
+                PebbleError::Storage(format!("Failed to serialize kanban context notes: {e}"))
+            })?;
+            tx.execute(
+                "INSERT INTO secure_user_data (key, value, updated_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(key) DO UPDATE SET
+                     value = excluded.value,
+                     updated_at = excluded.updated_at",
+                rusqlite::params![
+                    KANBAN_CONTEXT_NOTES_KEY,
+                    notes_json,
+                    pebble_core::now_timestamp()
+                ],
+            )
+            .map_err(|e| PebbleError::Storage(e.to_string()))?;
 
             // Upsert translate config — skip if config field is empty (redacted export)
             if let Some(tc) = &backup.translate_config {
@@ -514,6 +541,70 @@ mod tests {
 
         let accounts = store.list_accounts().unwrap();
         assert_eq!(accounts.len(), 1);
+    }
+
+    #[test]
+    fn test_export_import_round_trips_kanban_context_notes() {
+        let store = Store::open_in_memory().unwrap();
+        let now = now_timestamp();
+        let mut notes = HashMap::new();
+        notes.insert("message-1".to_string(), "follow up".to_string());
+        store
+            .set_secure_user_data(
+                KANBAN_CONTEXT_NOTES_KEY,
+                &serde_json::to_vec(&notes).unwrap(),
+            )
+            .unwrap();
+
+        let data = store.export_settings().unwrap();
+        let backup: SettingsBackup = serde_json::from_slice(&data).unwrap();
+        assert_eq!(
+            backup
+                .kanban_context_notes
+                .get("message-1")
+                .map(String::as_str),
+            Some("follow up")
+        );
+
+        let store2 = Store::open_in_memory().unwrap();
+        let stale_notes = HashMap::from([("old-message".to_string(), "old".to_string())]);
+        store2
+            .set_secure_user_data(
+                KANBAN_CONTEXT_NOTES_KEY,
+                &serde_json::to_vec(&stale_notes).unwrap(),
+            )
+            .unwrap();
+        store2.import_settings(&data).unwrap();
+
+        let restored: HashMap<String, String> = serde_json::from_slice(
+            &store2
+                .get_secure_user_data(KANBAN_CONTEXT_NOTES_KEY)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(restored, notes);
+
+        let empty_backup = SettingsBackup {
+            version: 1,
+            exported_at: now,
+            accounts: vec![],
+            rules: vec![],
+            kanban_cards: vec![],
+            kanban_context_notes: HashMap::new(),
+            translate_config: None,
+        };
+        store2
+            .import_settings(&serde_json::to_vec(&empty_backup).unwrap())
+            .unwrap();
+        let restored_empty: HashMap<String, String> = serde_json::from_slice(
+            &store2
+                .get_secure_user_data(KANBAN_CONTEXT_NOTES_KEY)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(restored_empty.is_empty());
     }
 
     #[test]

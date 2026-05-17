@@ -43,6 +43,7 @@ argon2 = "0.5"
 name = "pebble-web"
 version = "0.1.0"
 edition = "2021"
+license = "AGPL-3.0-only"
 
 [dependencies]
 axum = { workspace = true, features = ["ws"] }
@@ -57,6 +58,7 @@ jsonwebtoken = { workspace = true }
 argon2 = { workspace = true }
 hex = "0.4"
 base64 = "0.22"
+lol_html = { workspace = true }
 tokio-util = { version = "0.7", features = ["io"] }
 rusqlite = { workspace = true }
 pebble-core = { path = "crates/pebble-core" }

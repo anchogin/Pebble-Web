@@ -13,8 +13,9 @@ impl KeyStore {
     pub fn get_or_create_dek(key_file_path: Option<&Path>) -> Result<Zeroizing<[u8; 32]>> {
         // Priority 1: environment variable
         if let Ok(hex_key) = std::env::var("PEBBLE_ENCRYPTION_KEY") {
-            let bytes = hex::decode(hex_key.trim())
-                .map_err(|e| PebbleError::Auth(format!("Invalid PEBBLE_ENCRYPTION_KEY hex: {e}")))?;
+            let bytes = hex::decode(hex_key.trim()).map_err(|e| {
+                PebbleError::Auth(format!("Invalid PEBBLE_ENCRYPTION_KEY hex: {e}"))
+            })?;
             if bytes.len() != 32 {
                 return Err(PebbleError::Auth(format!(
                     "PEBBLE_ENCRYPTION_KEY must be 32 bytes, got {}",
@@ -56,7 +57,7 @@ impl KeyStore {
             fs::create_dir_all(parent)
                 .map_err(|e| PebbleError::Auth(format!("Failed to create key dir: {e}")))?;
         }
-        fs::write(&key_path, hex::encode(&*key))
+        fs::write(&key_path, hex::encode(*key))
             .map_err(|e| PebbleError::Auth(format!("Failed to write key file: {e}")))?;
 
         Ok(key)
