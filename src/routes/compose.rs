@@ -2,11 +2,13 @@ use crate::credentials::{decrypt_credentials, AccountCredentials};
 use crate::error::ApiError;
 use crate::state::AppStateRef;
 use axum::{extract::State, Json};
+use pebble_core::new_id;
 use pebble_mail::{ConnectionSecurity, SmtpConfig};
 use pebble_mail::smtp::SmtpSender;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ComposeRequest {
     pub account_id: String,
     pub to: Vec<String>,
@@ -23,6 +25,22 @@ pub async fn send_email(
     State(state): State<AppStateRef>,
     Json(body): Json<ComposeRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    // Validate attachment paths are within attachments_dir
+    if let Some(ref paths) = body.attachment_paths {
+        let allowed_dir = state.attachments_dir.canonicalize().unwrap_or_else(|_| state.attachments_dir.clone());
+        for path in paths {
+            let p = std::path::Path::new(path);
+            let canonical = p.canonicalize().map_err(|_| {
+                ApiError::BadRequest(format!("Attachment not found: {path}"))
+            })?;
+            if !canonical.starts_with(&allowed_dir) {
+                return Err(ApiError::BadRequest(
+                    "Attachment path outside allowed directory".to_string(),
+                ));
+            }
+        }
+    }
+
     // Get account and decrypt credentials
     let store = state.store.clone();
     let account_id = body.account_id.clone();
@@ -97,4 +115,44 @@ pub async fn send_email(
         .map_err(|e| ApiError::Internal(format!("Failed to send email: {e}")))?;
 
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StageAttachmentRequest {
+    pub filename: String,
+    pub data: String, // base64-encoded file content
+}
+
+#[derive(Serialize)]
+pub struct StageAttachmentResponse {
+    pub path: String,
+}
+
+pub async fn stage_attachment(
+    State(state): State<AppStateRef>,
+    Json(body): Json<StageAttachmentRequest>,
+) -> Result<Json<StageAttachmentResponse>, ApiError> {
+    use base64::Engine;
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&body.data)
+        .map_err(|e| ApiError::BadRequest(format!("Invalid base64 data: {e}")))?;
+
+    let staging_dir = state.attachments_dir.join("staging");
+    tokio::fs::create_dir_all(&staging_dir)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to create staging dir: {e}")))?;
+
+    let safe_filename = body.filename.replace(['/', '\\', ':'], "_").replace("..", "_");
+    let unique_name = format!("{}_{}", new_id(), safe_filename);
+    let file_path = staging_dir.join(&unique_name);
+
+    tokio::fs::write(&file_path, &bytes)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to write attachment: {e}")))?;
+
+    Ok(Json(StageAttachmentResponse {
+        path: file_path.to_string_lossy().to_string(),
+    }))
 }
