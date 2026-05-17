@@ -1,4 +1,4 @@
-const LEGACY_STORAGE_KEY = "pebble-templates";
+const STORAGE_KEY = "pebble-templates";
 
 export interface EmailTemplate {
   id: string;
@@ -8,22 +8,36 @@ export interface EmailTemplate {
   createdAt: number;
 }
 
-function clearLegacyTemplates() {
+function loadTemplates(): EmailTemplate[] {
   try {
-    localStorage.removeItem(LEGACY_STORAGE_KEY);
-  } catch { /* ignored */ }
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistTemplates(templates: EmailTemplate[]): void {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(templates));
 }
 
 export async function listTemplates(): Promise<EmailTemplate[]> {
-  clearLegacyTemplates();
-  // Not implemented in web backend
-  return [];
+  return loadTemplates();
 }
 
-export async function saveTemplate(_template: Omit<EmailTemplate, "id" | "createdAt">): Promise<EmailTemplate> {
-  throw new Error("Not implemented: saveTemplate");
+export async function saveTemplate(template: Omit<EmailTemplate, "id" | "createdAt">): Promise<EmailTemplate> {
+  const templates = loadTemplates();
+  const newTemplate: EmailTemplate = {
+    ...template,
+    id: crypto.randomUUID(),
+    createdAt: Date.now(),
+  };
+  templates.push(newTemplate);
+  persistTemplates(templates);
+  return newTemplate;
 }
 
-export async function deleteTemplate(_id: string): Promise<void> {
-  throw new Error("Not implemented: deleteTemplate");
+export async function deleteTemplate(id: string): Promise<void> {
+  const templates = loadTemplates().filter((t) => t.id !== id);
+  persistTemplates(templates);
 }

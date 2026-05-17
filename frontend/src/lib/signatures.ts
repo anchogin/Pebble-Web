@@ -1,16 +1,20 @@
-const LEGACY_STORAGE_KEY = "pebble-signatures";
+const STORAGE_KEY = "pebble-signatures";
 
-function clearLegacySignatures() {
+function loadSignatures(): Record<string, string> {
   try {
-    localStorage.removeItem(LEGACY_STORAGE_KEY);
-  } catch { /* ignored */ }
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
 }
 
-export async function getSignature(_accountId: string): Promise<string> {
-  clearLegacySignatures();
-  return "";
+export async function getSignature(accountId: string): Promise<string> {
+  return loadSignatures()[accountId] || "";
 }
 
-export async function setSignature(_accountId: string, _signature: string): Promise<void> {
-  throw new Error("Not implemented: setSignature");
+export async function setSignature(accountId: string, signature: string): Promise<void> {
+  const sigs = loadSignatures();
+  sigs[accountId] = signature;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(sigs));
 }

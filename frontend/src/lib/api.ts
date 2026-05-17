@@ -80,15 +80,18 @@ export async function readAppLog(_maxBytes: number): Promise<AppLogSnapshot> {
 }
 
 export async function getGlobalProxy(): Promise<HttpProxyConfig | null> {
-  throw new Error("Not implemented: getGlobalProxy");
+  console.warn("[api] getGlobalProxy not implemented in web");
+  return null;
 }
 
 export async function getAccountProxy(_accountId: string): Promise<HttpProxyConfig | null> {
-  throw new Error("Not implemented: getAccountProxy");
+  console.warn("[api] getAccountProxy not implemented in web");
+  return null;
 }
 
 export async function getAccountProxySetting(_accountId: string): Promise<AccountProxySetting> {
-  throw new Error("Not implemented: getAccountProxySetting");
+  console.warn("[api] getAccountProxySetting not implemented in web");
+  return { mode: "global" as AccountProxyMode, proxy: null };
 }
 
 export async function updateAccountProxy(
@@ -96,7 +99,7 @@ export async function updateAccountProxy(
   _proxyHost?: string,
   _proxyPort?: number,
 ): Promise<void> {
-  throw new Error("Not implemented: updateAccountProxy");
+  console.warn("[api] updateAccountProxy not implemented in web");
 }
 
 export async function updateAccountProxySetting(
@@ -105,14 +108,14 @@ export async function updateAccountProxySetting(
   _proxyHost?: string,
   _proxyPort?: number,
 ): Promise<void> {
-  throw new Error("Not implemented: updateAccountProxySetting");
+  console.warn("[api] updateAccountProxySetting not implemented in web");
 }
 
 export async function updateGlobalProxy(
   _proxyHost?: string,
   _proxyPort?: number,
 ): Promise<void> {
-  throw new Error("Not implemented: updateGlobalProxy");
+  console.warn("[api] updateGlobalProxy not implemented in web");
 }
 
 export async function completeOAuthFlow(
@@ -122,15 +125,17 @@ export async function completeOAuthFlow(
   _proxyHost?: string,
   _proxyPort?: number,
 ): Promise<Account> {
-  throw new Error("Not implemented: completeOAuthFlow");
+  throw new Error("OAuth flow is not supported in the web version");
 }
 
 export async function getOAuthAccountProxy(_accountId: string): Promise<HttpProxyConfig | null> {
-  throw new Error("Not implemented: getOAuthAccountProxy");
+  console.warn("[api] getOAuthAccountProxy not implemented in web");
+  return null;
 }
 
 export async function getOAuthAccountProxySetting(_accountId: string): Promise<AccountProxySetting> {
-  throw new Error("Not implemented: getOAuthAccountProxySetting");
+  console.warn("[api] getOAuthAccountProxySetting not implemented in web");
+  return { mode: "global" as AccountProxyMode, proxy: null };
 }
 
 export async function updateOAuthAccountProxy(
@@ -138,7 +143,7 @@ export async function updateOAuthAccountProxy(
   _proxyHost?: string,
   _proxyPort?: number,
 ): Promise<void> {
-  throw new Error("Not implemented: updateOAuthAccountProxy");
+  console.warn("[api] updateOAuthAccountProxy not implemented in web");
 }
 
 export async function updateOAuthAccountProxySetting(
@@ -147,27 +152,32 @@ export async function updateOAuthAccountProxySetting(
   _proxyHost?: string,
   _proxyPort?: number,
 ): Promise<void> {
-  throw new Error("Not implemented: updateOAuthAccountProxySetting");
+  console.warn("[api] updateOAuthAccountProxySetting not implemented in web");
 }
 
-export async function addAccount(_request: AddAccountRequest): Promise<Account> {
-  throw new Error("Not implemented: addAccount");
+export async function addAccount(request: AddAccountRequest): Promise<Account> {
+  const res = await api.post<Account>("/accounts", request);
+  return res.data;
 }
 
-export async function testAccountConnection(_accountId: string): Promise<string> {
-  throw new Error("Not implemented: testAccountConnection");
+export async function testAccountConnection(accountId: string): Promise<string> {
+  const res = await api.post<{ ok: boolean; report: string }>(`/accounts/${accountId}/test-connection`);
+  return res.data.report;
 }
 
 export async function testImapConnection(
-  _imapHost: string,
-  _imapPort: number,
-  _imapSecurity: ConnectionSecurity,
+  imapHost: string,
+  imapPort: number,
+  imapSecurity: ConnectionSecurity,
   _proxyHost?: string,
   _proxyPort?: number,
-  _username?: string,
-  _password?: string,
+  username?: string,
+  password?: string,
 ): Promise<string> {
-  throw new Error("Not implemented: testImapConnection");
+  const res = await api.post<{ ok: boolean; report: string }>("/test-imap-connection", {
+    imapHost, imapPort, imapSecurity, username, password,
+  });
+  return res.data.report;
 }
 
 export async function listAccounts(): Promise<Account[]> {
@@ -176,25 +186,36 @@ export async function listAccounts(): Promise<Account[]> {
 }
 
 export async function updateAccount(
-  _accountId: string,
-  _email: string,
-  _displayName: string,
-  _password?: string,
-  _imapHost?: string,
-  _imapPort?: number,
-  _smtpHost?: string,
-  _smtpPort?: number,
-  _imapSecurity?: ConnectionSecurity,
-  _smtpSecurity?: ConnectionSecurity,
+  accountId: string,
+  email: string,
+  displayName: string,
+  password?: string,
+  imapHost?: string,
+  imapPort?: number,
+  smtpHost?: string,
+  smtpPort?: number,
+  imapSecurity?: ConnectionSecurity,
+  smtpSecurity?: ConnectionSecurity,
   _proxyHost?: string,
   _proxyPort?: number,
-  _accountColor?: string,
+  accountColor?: string,
 ): Promise<void> {
-  throw new Error("Not implemented: updateAccount");
+  await api.put(`/accounts/${accountId}`, {
+    email,
+    displayName,
+    color: accountColor,
+    password: password || undefined,
+    imapHost,
+    imapPort,
+    smtpHost,
+    smtpPort,
+    imapSecurity,
+    smtpSecurity,
+  });
 }
 
-export async function deleteAccount(_accountId: string): Promise<void> {
-  throw new Error("Not implemented: deleteAccount");
+export async function deleteAccount(accountId: string): Promise<void> {
+  await api.delete(`/accounts/${accountId}`);
 }
 
 // ─── Folder API ──────────────────────────────────────────────────────────────
@@ -317,19 +338,19 @@ export async function listPendingMailOps(
 // ─── Trusted Senders API ────────────────────────────────────────────────────
 
 export async function listTrustedSenders(_accountId: string): Promise<TrustedSender[]> {
-  throw new Error("Not implemented: listTrustedSenders");
+  return [];
 }
 
 export async function removeTrustedSender(_accountId: string, _email: string): Promise<void> {
-  throw new Error("Not implemented: removeTrustedSender");
+  console.warn("[api] removeTrustedSender not implemented in web");
 }
 
 export async function trustSender(_accountId: string, _email: string, _trustType: "images" | "all"): Promise<void> {
-  throw new Error("Not implemented: trustSender");
+  console.warn("[api] trustSender not implemented in web");
 }
 
 export async function isTrustedSender(_accountId: string, _email: string): Promise<boolean> {
-  throw new Error("Not implemented: isTrustedSender");
+  return false;
 }
 
 // ─── Search API ──────────────────────────────────────────────────────────────
@@ -346,15 +367,25 @@ export async function advancedSearch(
   query: AdvancedSearchQuery,
   limit?: number,
 ): Promise<SearchHit[]> {
-  const res = await api.post<SearchHit[]>("/search/advanced", { query, limit });
+  const res = await api.post<SearchHit[]>("/search", {
+    query: query.text,
+    from: query.from,
+    to: query.to,
+    subject: query.subject,
+    dateFrom: query.dateFrom,
+    dateTo: query.dateTo,
+    hasAttachment: query.hasAttachment,
+    folderId: query.folderId,
+    limit,
+  });
   return res.data;
 }
 
 // ─── Sync API ────────────────────────────────────────────────────────────────
 
 export async function startSync(accountId: string, _pollIntervalSecs?: number): Promise<string> {
-  const res = await api.post<string>("/sync/trigger", { accountId, reason: "start_sync" });
-  return res.data;
+  await api.post("/sync/trigger", { accountId });
+  return "ok";
 }
 
 export async function triggerSync(accountId: string, reason: string): Promise<void> {
@@ -399,17 +430,25 @@ export async function listAttachments(messageId: string): Promise<Attachment[]> 
 }
 
 export async function getAttachmentPath(_attachmentId: string): Promise<string | null> {
-  throw new Error("Not implemented: getAttachmentPath (desktop-only)");
+  return null;
 }
 
-export async function downloadAttachment(_attachmentId: string, _saveTo: string): Promise<string> {
-  throw new Error("Not implemented: downloadAttachment (desktop-only)");
+export async function downloadAttachment(attachmentId: string, _saveTo: string): Promise<string> {
+  const res = await api.get(`/attachments/${attachmentId}/download`, { responseType: "blob" });
+  const blob = new Blob([res.data]);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = attachmentId;
+  a.click();
+  URL.revokeObjectURL(url);
+  return attachmentId;
 }
 
 // ─── Kanban API ──────────────────────────────────────────────────────────────
 
 export async function moveToKanban(_messageId: string, _column: KanbanColumnType, _position?: number): Promise<void> {
-  throw new Error("Not implemented: moveToKanban");
+  console.warn("[api] moveToKanban not implemented in web");
 }
 
 export async function listKanbanCards(_column?: KanbanColumnType): Promise<KanbanCard[]> {
@@ -417,7 +456,7 @@ export async function listKanbanCards(_column?: KanbanColumnType): Promise<Kanba
 }
 
 export async function removeFromKanban(_messageId: string): Promise<void> {
-  throw new Error("Not implemented: removeFromKanban");
+  console.warn("[api] removeFromKanban not implemented in web");
 }
 
 export async function listKanbanContextNotes(): Promise<Record<string, string>> {
@@ -428,23 +467,25 @@ export async function setKanbanContextNote(
   _messageId: string,
   _note: string,
 ): Promise<Record<string, string>> {
-  throw new Error("Not implemented: setKanbanContextNote");
+  console.warn("[api] setKanbanContextNote not implemented in web");
+  return {};
 }
 
 export async function mergeKanbanContextNotes(
   _notes: Record<string, string>,
 ): Promise<Record<string, string>> {
-  throw new Error("Not implemented: mergeKanbanContextNotes");
+  console.warn("[api] mergeKanbanContextNotes not implemented in web");
+  return {};
 }
 
 // ─── Snooze API ──────────────────────────────────────────────────────────────
 
 export async function snoozeMessage(_messageId: string, _until: number, _returnTo: string): Promise<void> {
-  throw new Error("Not implemented: snoozeMessage");
+  console.warn("[api] snoozeMessage not implemented in web");
 }
 
 export async function unsnoozeMessage(_messageId: string): Promise<void> {
-  throw new Error("Not implemented: unsnoozeMessage");
+  console.warn("[api] unsnoozeMessage not implemented in web");
 }
 
 export async function listSnoozed(): Promise<SnoozedMessage[]> {
@@ -454,7 +495,8 @@ export async function listSnoozed(): Promise<SnoozedMessage[]> {
 // ─── Rules API ───────────────────────────────────────────────────────────────
 
 export async function createRule(_name: string, _priority: number, _conditions: string, _actions: string): Promise<Rule> {
-  throw new Error("Not implemented: createRule");
+  console.warn("[api] createRule not implemented in web");
+  return { id: "", name: _name, priority: _priority, conditions: _conditions, actions: _actions } as Rule;
 }
 
 export async function listRules(): Promise<Rule[]> {
@@ -462,11 +504,11 @@ export async function listRules(): Promise<Rule[]> {
 }
 
 export async function updateRule(_rule: Rule): Promise<void> {
-  throw new Error("Not implemented: updateRule");
+  console.warn("[api] updateRule not implemented in web");
 }
 
 export async function deleteRule(_ruleId: string): Promise<void> {
-  throw new Error("Not implemented: deleteRule");
+  console.warn("[api] deleteRule not implemented in web");
 }
 
 // ─── Compose API ─────────────────────────────────────────────────────────────
@@ -487,8 +529,15 @@ export async function sendEmail(
   });
 }
 
-export async function stageComposeAttachment(_filename: string, _bytes: number[]): Promise<string> {
-  throw new Error("Not implemented: stageComposeAttachment");
+export async function stageComposeAttachment(filename: string, bytes: number[]): Promise<string> {
+  const uint8 = new Uint8Array(bytes);
+  let binary = "";
+  for (let i = 0; i < uint8.length; i++) {
+    binary += String.fromCharCode(uint8[i]);
+  }
+  const data = btoa(binary);
+  const res = await api.post<{ path: string }>("/compose/attachment", { filename, data });
+  return res.data.path;
 }
 
 // ─── Batch Operations ───────────────────────────────────────────────────────
@@ -515,20 +564,31 @@ export async function batchStar(messageIds: string[], starred: boolean): Promise
 
 // ─── Translate API ───────────────────────────────────────────────────────────
 
-export async function translateText(_text: string, _fromLang: string, _toLang: string): Promise<TranslateResult> {
-  throw new Error("Not implemented: translateText");
+export async function translateText(text: string, fromLang: string, toLang: string): Promise<TranslateResult> {
+  const res = await api.post<TranslateResult>("/translate", { text, source_lang: fromLang, target_lang: toLang });
+  return res.data;
 }
 
 export async function getTranslateConfig(): Promise<TranslateConfig | null> {
-  return null;
+  const res = await api.get<{ providerType: string; config: string; isEnabled: boolean } | null>("/translate/config");
+  if (!res.data) return null;
+  return {
+    id: "active",
+    provider_type: res.data.providerType,
+    config: res.data.config,
+    is_enabled: res.data.isEnabled,
+    created_at: 0,
+    updated_at: 0,
+  };
 }
 
-export async function saveTranslateConfig(_providerType: string, _config: string, _isEnabled: boolean): Promise<void> {
-  throw new Error("Not implemented: saveTranslateConfig");
+export async function saveTranslateConfig(providerType: string, config: string, isEnabled: boolean): Promise<void> {
+  await api.post("/translate/config", { providerType, config, isEnabled });
 }
 
-export async function testTranslateConnection(_config: string): Promise<string> {
-  throw new Error("Not implemented: testTranslateConnection");
+export async function testTranslateConnection(config: string): Promise<string> {
+  const res = await api.post<{ ok: boolean; result: string }>("/translate/test", { providerType: "test", config, isEnabled: true });
+  return res.data.result;
 }
 
 // ─── Thread API ──────────────────────────────────────────────────────────────
@@ -560,34 +620,48 @@ export async function getMessageLabelsBatch(_messageIds: string[]): Promise<Reco
   return {};
 }
 
-export async function addMessageLabel(_messageId: string, _labelName: string): Promise<void> {
-  throw new Error("Not implemented: addMessageLabel");
+export async function addMessageLabel(messageId: string, labelName: string): Promise<void> {
+  await api.post(`/messages/${messageId}/labels`, { label_name: labelName });
 }
 
-export async function removeMessageLabel(_messageId: string, _labelName: string): Promise<void> {
-  throw new Error("Not implemented: removeMessageLabel");
+export async function removeMessageLabel(messageId: string, labelName: string): Promise<void> {
+  await api.delete(`/messages/${messageId}/labels/${encodeURIComponent(labelName)}`);
 }
 
 export async function listLabels(): Promise<Label[]> {
-  return [];
+  const res = await api.get<Label[]>("/labels");
+  return res.data;
+}
+
+export async function createLabel(name: string, color?: string): Promise<Label> {
+  const res = await api.post<Label>("/labels", { name, color });
+  return res.data;
+}
+
+export async function deleteLabel(id: string): Promise<void> {
+  await api.delete(`/labels/${id}`);
 }
 
 // ─── Cloud Sync API ─────────────────────────────────────────────────────────
 
 export async function testWebdavConnection(_url: string, _username: string, _password: string): Promise<string> {
-  throw new Error("Not implemented: testWebdavConnection");
+  console.warn("[api] testWebdavConnection not implemented in web");
+  return "not_available";
 }
 
 export async function backupToWebdav(_url: string, _username: string, _password: string): Promise<string> {
-  throw new Error("Not implemented: backupToWebdav");
+  console.warn("[api] backupToWebdav not implemented in web");
+  return "not_available";
 }
 
 export async function previewWebdavBackup(_url: string, _username: string, _password: string): Promise<BackupPreview> {
-  throw new Error("Not implemented: previewWebdavBackup");
+  console.warn("[api] previewWebdavBackup not implemented in web");
+  return { version: 0, exported_at: 0, account_count: 0, rule_count: 0, kanban_card_count: 0, kanban_note_count: 0, has_translate_config: false, size_bytes: 0 };
 }
 
 export async function restoreFromWebdav(_url: string, _username: string, _password: string): Promise<string> {
-  throw new Error("Not implemented: restoreFromWebdav");
+  console.warn("[api] restoreFromWebdav not implemented in web");
+  return "not_available";
 }
 
 // ─── Contacts API ────────────────────────────────────────────────────────────
@@ -614,11 +688,12 @@ export async function saveDraft(_args: {
   existingDraftId?: string;
   attachmentPaths?: string[];
 }): Promise<string> {
-  throw new Error("Not implemented: saveDraft");
+  console.warn("[api] saveDraft not implemented in web");
+  return "";
 }
 
 export async function deleteDraft(_accountId: string, _draftId: string): Promise<void> {
-  throw new Error("Not implemented: deleteDraft");
+  console.warn("[api] deleteDraft not implemented in web");
 }
 
 // ─── Folder Counts API ───────────────────────────────────────────────────────

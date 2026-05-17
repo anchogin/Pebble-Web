@@ -4,22 +4,36 @@ class WebSocketClient {
   private ws: WebSocket | null = null;
   private handlers: Map<string, EventHandler[]> = new Map();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private authenticated = false;
 
   connect() {
     const token = localStorage.getItem("pebble_token");
     if (!token) return;
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const url = `${protocol}//${window.location.host}/api/v1/ws?token=${token}`;
+    const url = `${protocol}//${window.location.host}/api/v1/ws`;
 
     this.ws = new WebSocket(url);
+    this.authenticated = false;
+
+    this.ws.onopen = () => {
+      // Send token as first message for authentication
+      this.ws?.send(token);
+    };
 
     this.ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
+        if (!this.authenticated) {
+          if (msg.type === "authenticated") {
+            this.authenticated = true;
+          } else if (msg.type === "error") {
+            this.ws?.close();
+          }
+          return;
+        }
         const handlers = this.handlers.get(msg.type) || [];
         handlers.forEach((h) => h(msg));
-        // Also fire a wildcard handler
         const allHandlers = this.handlers.get("*") || [];
         allHandlers.forEach((h) => h(msg));
       } catch {
@@ -28,6 +42,7 @@ class WebSocketClient {
     };
 
     this.ws.onclose = () => {
+      this.authenticated = false;
       this.reconnectTimer = setTimeout(() => this.connect(), 5000);
     };
 
@@ -43,6 +58,7 @@ class WebSocketClient {
     }
     this.ws?.close();
     this.ws = null;
+    this.authenticated = false;
   }
 
   on(event: string, handler: EventHandler) {
