@@ -21,6 +21,22 @@ Pebble Web is a self-hosted web email client derived from the desktop [Pebble](h
 
 ## Quick Start
 
+### One-Command Deploy
+
+On a Linux server with Docker and Docker Compose installed:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/QingJ01/Pebble-Web/master/scripts/deploy.sh | bash
+```
+
+The script clones or updates the project, creates `.env`, builds the image, and starts the service. The default install directory is `~/pebble-web`, and the default port is `8080`.
+
+To customize the directory, port, or login password:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/QingJ01/Pebble-Web/master/scripts/deploy.sh | env PEBBLE_INSTALL_DIR=/opt/pebble-web PEBBLE_PORT=8080 PEBBLE_PASSWORD='change-me' bash
+```
+
 ### Docker Compose
 
 Docker Compose is the recommended deployment method:

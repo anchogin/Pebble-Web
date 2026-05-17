@@ -21,6 +21,22 @@ Pebble Web 是一个可自托管的 Web 邮件客户端，基于桌面端 [Pebbl
 
 ## 快速开始
 
+### 一键部署
+
+在已安装 Docker 和 Docker Compose 的 Linux 服务器上运行：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/QingJ01/Pebble-Web/master/scripts/deploy.sh | bash
+```
+
+脚本会自动拉取项目、生成 `.env`、构建镜像并启动服务。默认安装目录为 `~/pebble-web`，默认端口为 `8080`。
+
+如需自定义目录、端口或登录密码：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/QingJ01/Pebble-Web/master/scripts/deploy.sh | env PEBBLE_INSTALL_DIR=/opt/pebble-web PEBBLE_PORT=8080 PEBBLE_PASSWORD='change-me' bash
+```
+
 ### Docker Compose
 
 推荐使用 Docker Compose 部署：
