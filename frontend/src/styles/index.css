@@ -1,0 +1,1045 @@
+@import "tailwindcss" source(none);
+@source "../**/*.{ts,tsx}";
+
+:root {
+  --color-sidebar-bg: #f8f7f5;
+  --color-sidebar-hover: #eeedeb;
+  --color-sidebar-active: #e5e4e2;
+  --color-titlebar-bg: #f8f7f5;
+  --color-main-bg: #ffffff;
+  --color-statusbar-bg: #f8f7f5;
+  --color-border: #e5e4e2;
+  --color-text-primary: #1a1a1a;
+  --color-text-secondary: #6b6b6b;
+  --color-accent: #d4714e;
+  --color-bg: #ffffff;
+  --color-bg-hover: rgba(0,0,0,0.05);
+  --color-bg-secondary: rgba(0,0,0,0.06);
+  --color-scrollbar-track: transparent;
+  --color-scrollbar-thumb: rgba(26, 26, 26, 0.22);
+  --color-scrollbar-thumb-hover: rgba(26, 26, 26, 0.38);
+}
+
+[data-theme="dark"] {
+  --color-sidebar-bg: #1e1e1e;
+  --color-sidebar-hover: #2a2a2a;
+  --color-sidebar-active: #333333;
+  --color-titlebar-bg: #1e1e1e;
+  --color-main-bg: #141414;
+  --color-statusbar-bg: #1e1e1e;
+  --color-border: #2e2e2e;
+  --color-text-primary: #e0e0e0;
+  --color-text-secondary: #aaaaaa;
+  --color-accent: #d4714e;
+  --color-bg: #1a1a1a;
+  --color-bg-hover: rgba(255,255,255,0.06);
+  --color-bg-secondary: rgba(255,255,255,0.08);
+  --color-scrollbar-track: transparent;
+  --color-scrollbar-thumb: rgba(255, 255, 255, 0.22);
+  --color-scrollbar-thumb-hover: rgba(255, 255, 255, 0.38);
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color: var(--color-text-primary);
+  background: var(--color-main-bg);
+}
+
+.app-shell {
+  position: relative;
+  background: var(--color-main-bg);
+  isolation: isolate;
+}
+
+.app-background-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-color: var(--color-main-bg);
+}
+
+.app-shell > :not(.app-background-layer) {
+  position: relative;
+  z-index: 1;
+}
+
+.app-shell--with-background {
+  background: transparent;
+}
+
+.app-shell--with-background > [data-tauri-drag-region] {
+  background-color: color-mix(in srgb, var(--color-titlebar-bg) 78%, transparent) !important;
+  backdrop-filter: blur(18px);
+}
+
+.app-shell--with-background .app-shell-content > aside {
+  background-color: color-mix(in srgb, var(--color-sidebar-bg) 76%, transparent) !important;
+  backdrop-filter: blur(18px);
+}
+
+.app-shell--with-background > footer {
+  background-color: color-mix(in srgb, var(--color-statusbar-bg) 76%, transparent) !important;
+  backdrop-filter: blur(18px);
+}
+
+.app-shell--with-background .app-main-scroll {
+  background-color: color-mix(in srgb, var(--color-main-bg) 68%, transparent);
+  backdrop-filter: blur(16px) saturate(1.02);
+}
+
+input,
+textarea,
+select,
+option {
+  color-scheme: light dark;
+}
+
+input,
+textarea,
+select {
+  caret-color: var(--color-text-primary);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: color-mix(in srgb, var(--color-text-secondary) 72%, transparent);
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--color-accent);
+}
+
+option {
+  background-color: var(--color-bg);
+  color: var(--color-text-primary);
+}
+
+[data-theme="dark"] input,
+[data-theme="dark"] textarea,
+[data-theme="dark"] select,
+[data-theme="dark"] option {
+  color-scheme: dark;
+}
+
+[data-theme="dark"] select,
+[data-theme="dark"] option {
+  background-color: var(--color-bg);
+  color: var(--color-text-primary);
+}
+
+[data-theme="dark"] input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(1) opacity(0.8);
+}
+
+[data-theme="dark"] option:checked {
+  background-color: color-mix(in srgb, var(--color-accent) 34%, var(--color-bg));
+  color: var(--color-text-primary);
+}
+
+/* Themed scrollbars for scrollable panes. Keeps the gutter stable so content
+   does not shift when a scrollbar appears after message content loads. */
+.scroll-region {
+  min-width: 0;
+  min-height: 0;
+  overscroll-behavior: contain;
+  scrollbar-color: var(--color-scrollbar-thumb) var(--color-scrollbar-track);
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.scroll-region::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.scroll-region::-webkit-scrollbar-track {
+  background: var(--color-scrollbar-track);
+}
+
+.scroll-region::-webkit-scrollbar-thumb {
+  min-height: 40px;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+  background-color: var(--color-scrollbar-thumb);
+}
+
+.scroll-region:hover::-webkit-scrollbar-thumb,
+.scroll-region:focus-within::-webkit-scrollbar-thumb {
+  background-color: var(--color-scrollbar-thumb-hover);
+}
+
+.scroll-region::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.settings-panel-scroll {
+  scrollbar-color: color-mix(in srgb, var(--color-scrollbar-thumb) 86%, transparent) transparent;
+  scrollbar-gutter: stable;
+}
+
+.settings-panel-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 0;
+}
+
+.settings-panel-scroll::-webkit-scrollbar-thumb {
+  min-height: 56px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+  background-color: color-mix(in srgb, var(--color-scrollbar-thumb) 86%, transparent);
+}
+
+.settings-panel-scroll:hover::-webkit-scrollbar-thumb,
+.settings-panel-scroll:focus-within::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--color-accent) 62%, transparent);
+}
+
+/* ─── Animations ──────────────────────────────────────────── */
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.fade-in {
+  animation: fadeIn 0.2s ease-out both;
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--color-bg-secondary) 25%,
+    var(--color-bg-hover) 50%,
+    var(--color-bg-secondary) 75%
+  );
+  background-size: 800px 100%;
+  animation: shimmer 1.5s infinite linear;
+  border-radius: 4px;
+}
+
+.spinner {
+  animation: spin 0.8s linear infinite;
+  color: var(--color-text-secondary);
+}
+
+.message-detail-container {
+  background-color: var(--color-bg);
+}
+
+.app-shell--with-background .message-detail-container {
+  background-color: transparent;
+}
+
+.message-list-row,
+.thread-list-row {
+  background: transparent;
+}
+
+.message-list-row[aria-selected="true"],
+.thread-list-row[aria-selected="true"] {
+  background: var(--color-sidebar-active);
+}
+
+.message-list-row[aria-selected="false"]:hover,
+.message-list-row[aria-selected="false"]:focus,
+.thread-list-row[aria-selected="false"]:hover,
+.thread-list-row[aria-selected="false"]:focus {
+  background: var(--color-bg-hover);
+}
+
+.message-list-row--unread[aria-selected="false"]:hover,
+.message-list-row--unread[aria-selected="false"]:focus,
+.thread-list-row--unread[aria-selected="false"]:hover,
+.thread-list-row--unread[aria-selected="false"]:focus {
+  background: var(--color-bg-hover);
+}
+
+.app-shell--with-background .message-list-row[aria-selected="true"],
+.app-shell--with-background .thread-list-row[aria-selected="true"] {
+  background: color-mix(in srgb, var(--color-sidebar-active) 60%, transparent);
+}
+
+/* Staggered fade-in for list items */
+.fade-in-item { animation: fadeIn 0.25s ease-out both; }
+.fade-in-item:nth-child(1)  { animation-delay: 0ms; }
+.fade-in-item:nth-child(2)  { animation-delay: 30ms; }
+.fade-in-item:nth-child(3)  { animation-delay: 60ms; }
+.fade-in-item:nth-child(4)  { animation-delay: 90ms; }
+.fade-in-item:nth-child(5)  { animation-delay: 120ms; }
+.fade-in-item:nth-child(6)  { animation-delay: 150ms; }
+.fade-in-item:nth-child(7)  { animation-delay: 180ms; }
+.fade-in-item:nth-child(8)  { animation-delay: 210ms; }
+.fade-in-item:nth-child(9)  { animation-delay: 240ms; }
+.fade-in-item:nth-child(10) { animation-delay: 270ms; }
+
+/* Toast animation */
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.95); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Respect reduced-motion preferences (WCAG 2.1 AA — SC 2.3.3) */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ─── Focus-visible ──────────────────────────────────────── */
+
+/* Global focus ring for keyboard navigation — mouse clicks won't trigger */
+*:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Inputs/selects get an inset ring instead */
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline-offset: -1px;
+}
+
+/* Tiptap editor uses the global :focus-visible ring. */
+
+/* Compose */
+
+.compose-form-shell {
+  width: 100%;
+  max-width: 920px;
+  min-height: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  margin: 0 auto;
+}
+
+.compose-editor-toolbar-row {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-bg) 96%, var(--color-bg-secondary));
+}
+
+.compose-toolbar-tools {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.compose-toolbar-actions,
+.compose-format-toolbar,
+.compose-format-toolbar-slot,
+.compose-mode-tabs {
+  display: flex;
+  align-items: center;
+}
+
+.compose-toolbar-actions,
+.compose-format-toolbar {
+  gap: 2px;
+}
+
+.compose-format-toolbar {
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.compose-format-toolbar-slot {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.compose-toolbar-divider {
+  width: 1px;
+  height: 22px;
+  flex: 0 0 auto;
+  background: var(--color-border);
+}
+
+.compose-format-button,
+.compose-toolbar-icon-button,
+.compose-toolbar-text-button,
+.compose-mode-button {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+  transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+
+.compose-format-button,
+.compose-toolbar-icon-button {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 28px;
+  padding: 0;
+  border-radius: 6px;
+}
+
+.compose-toolbar-text-button {
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.compose-format-button:hover,
+.compose-toolbar-icon-button:hover,
+.compose-toolbar-text-button:hover,
+.compose-mode-button:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.compose-format-button.is-active,
+.compose-toolbar-icon-button.is-active,
+.compose-toolbar-text-button.is-active,
+.compose-mode-button.is-active {
+  border-color: color-mix(in srgb, var(--color-accent) 24%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  color: var(--color-accent);
+}
+
+.compose-mode-tabs {
+  flex: 0 0 auto;
+  gap: 2px;
+  margin-left: auto;
+  padding: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg);
+}
+
+.compose-mode-button {
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.compose-inline-panel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 9px 20px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.compose-editor-area {
+  position: relative;
+  min-height: 340px;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 20px 20px;
+  box-sizing: border-box;
+  background: color-mix(in srgb, var(--color-bg) 98%, var(--color-bg-secondary));
+}
+
+.compose-editor-surface {
+  min-height: 320px;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--color-border) 86%, transparent);
+  border-radius: 8px;
+  background: var(--color-bg);
+  transition: border-color 0.14s ease, box-shadow 0.14s ease;
+}
+
+.compose-editor-surface:focus-within {
+  border-color: color-mix(in srgb, var(--color-accent) 48%, var(--color-border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 13%, transparent);
+}
+
+.compose-editor-content,
+.compose-source-input,
+.compose-preview-split {
+  width: 100%;
+  height: 100%;
+  min-height: 320px;
+  box-sizing: border-box;
+}
+
+.compose-editor-content {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  padding: 18px 22px;
+  color: var(--color-text-primary);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.compose-editor-content .ProseMirror {
+  flex: 1 1 auto;
+  min-height: 284px;
+  outline: 0;
+}
+
+.compose-editor-content .ProseMirror:focus,
+.compose-editor-content .ProseMirror:focus-visible {
+  outline: 0;
+}
+
+.compose-editor-content .ProseMirror > :first-child {
+  margin-top: 0;
+}
+
+.compose-source-input {
+  flex: 1 1 auto;
+  display: block;
+  padding: 18px 22px;
+  border: 0;
+  resize: none;
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.compose-source-input:focus,
+.compose-source-input:focus-visible {
+  outline: 0;
+}
+
+.compose-source-input.is-code {
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+.compose-preview-split {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.compose-source-input--split {
+  border-right: 1px solid var(--color-border);
+}
+
+.compose-html-preview {
+  width: 100%;
+  height: 100%;
+  min-height: 320px;
+  border: 0;
+  background: #fff;
+}
+
+.compose-drop-overlay {
+  position: absolute;
+  inset: 16px 20px 20px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 2px dashed var(--color-accent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-accent) 9%, transparent);
+  color: var(--color-accent);
+  font-size: 14px;
+  font-weight: 500;
+  pointer-events: none;
+}
+
+.compose-quoted-reply {
+  flex: 0 0 auto;
+  margin-top: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-bg) 94%, var(--color-bg-secondary));
+  overflow: hidden;
+}
+
+.compose-quoted-reply-toggle {
+  width: 100%;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  transition: background-color 0.14s ease, color 0.14s ease;
+}
+
+.compose-quoted-reply-toggle:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.compose-quoted-reply-toggle svg {
+  flex: 0 0 auto;
+}
+
+.compose-quoted-reply-content {
+  max-height: 240px;
+  overflow: auto;
+  padding: 12px 14px;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+  user-select: text;
+}
+
+.compose-quoted-reply-content blockquote {
+  margin: 0;
+  padding-left: 12px;
+  border-left: 3px solid color-mix(in srgb, var(--color-text-secondary) 24%, transparent);
+}
+
+.compose-quoted-reply-content p {
+  margin: 0 0 10px;
+}
+
+.compose-quoted-reply-content p:last-child {
+  margin-bottom: 0;
+}
+
+@media (max-width: 720px) {
+  .compose-editor-toolbar-row,
+  .compose-toolbar-tools {
+    flex-wrap: wrap;
+  }
+
+  .compose-toolbar-tools,
+  .compose-mode-tabs {
+    flex-basis: 100%;
+  }
+
+  .compose-mode-tabs {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .compose-mode-button {
+    flex: 1 1 0;
+    justify-content: center;
+  }
+
+  .compose-editor-area {
+    padding: 12px;
+  }
+
+  .compose-drop-overlay {
+    inset: 12px;
+  }
+}
+
+/* ─── Search Controls ───────────────────────────────────── */
+
+.search-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-bg) 94%, var(--color-bg-secondary));
+}
+
+.search-input-shell {
+  flex: 1;
+  min-width: 0;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg);
+  transition: border-color 0.14s ease, box-shadow 0.14s ease, background-color 0.14s ease;
+}
+
+.search-input-shell:focus-within {
+  border-color: color-mix(in srgb, var(--color-accent) 46%, var(--color-border));
+  box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--color-accent) 14%, transparent);
+}
+
+.search-input-shell svg {
+  flex-shrink: 0;
+  color: color-mix(in srgb, var(--color-text-secondary) 86%, var(--color-text-primary));
+}
+
+.app-shell--with-background .search-toolbar {
+  border-bottom-color: color-mix(in srgb, var(--color-border) 60%, transparent);
+  background: color-mix(in srgb, var(--color-bg) 12%, transparent);
+}
+
+.app-shell--with-background .search-input-shell {
+  border-color: color-mix(in srgb, var(--color-border) 50%, transparent);
+  background: color-mix(in srgb, var(--color-bg) 18%, transparent);
+}
+
+.search-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.search-input:focus-visible {
+  outline: 0;
+}
+
+.search-input::placeholder {
+  color: color-mix(in srgb, var(--color-text-secondary) 82%, transparent);
+}
+
+.inbox-toolbar-row {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-bg) 96%, var(--color-bg-secondary));
+}
+
+.app-shell--with-background .inbox-toolbar-row {
+  border-bottom-color: color-mix(in srgb, var(--color-border) 60%, transparent);
+  background: color-mix(in srgb, var(--color-bg) 12%, transparent);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--color-border) 50%, transparent);
+}
+
+.inbox-toolbar-search {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.inbox-toolbar-search .search-toolbar {
+  border-bottom: 0;
+  background: transparent;
+}
+
+.app-shell--with-background .inbox-toolbar-search .search-toolbar {
+  background: transparent;
+  backdrop-filter: none;
+}
+
+.inbox-toolbar-button {
+  position: relative;
+  z-index: 1;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+  transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+
+.inbox-toolbar-button:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.inbox-toolbar-button:active {
+  background: var(--color-bg-secondary);
+}
+
+.inbox-toolbar-button--end {
+  margin-right: 8px;
+}
+
+.search-toolbar-button {
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+
+.search-toolbar-button:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.search-toolbar-button.is-active {
+  border-color: color-mix(in srgb, var(--color-accent) 24%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  color: var(--color-accent);
+}
+
+.search-toolbar-button--primary {
+  padding: 0 12px;
+  color: var(--color-accent);
+}
+
+.search-toolbar-icon-button {
+  width: 34px;
+  padding: 0;
+}
+
+.batch-select-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-right: auto;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.batch-select-control span {
+  white-space: nowrap;
+}
+
+.batch-checkbox {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+  display: inline-grid;
+  place-content: center;
+  margin: 0;
+  border: 1px solid color-mix(in srgb, var(--color-text-secondary) 52%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-bg) 82%, var(--color-bg-secondary));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 8%, transparent);
+  cursor: pointer;
+  transition: background-color 0.14s ease, border-color 0.14s ease, box-shadow 0.14s ease;
+}
+
+.batch-checkbox::before {
+  content: "";
+  width: 7px;
+  height: 4px;
+  margin-top: -1px;
+  border-left: 2px solid #fff;
+  border-bottom: 2px solid #fff;
+  transform: rotate(-45deg) scale(0);
+  transform-origin: center;
+  transition: transform 0.12s ease;
+}
+
+.batch-checkbox:hover {
+  border-color: color-mix(in srgb, var(--color-text-secondary) 78%, transparent);
+  background: var(--color-bg-hover);
+}
+
+.batch-checkbox:checked {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 22%, transparent);
+}
+
+.batch-checkbox:checked::before {
+  transform: rotate(-45deg) scale(1);
+}
+
+.batch-checkbox:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.message-row-checkbox {
+  margin-right: 10px;
+}
+
+.search-filters-panel {
+  padding: 14px 18px 16px;
+  border-bottom: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-bg) 92%, var(--color-bg-secondary));
+}
+
+.search-filters-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+
+.search-filter-field {
+  min-width: 0;
+}
+
+.search-filter-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.search-filter-control {
+  width: 100%;
+  height: 34px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  transition: border-color 0.14s ease, box-shadow 0.14s ease, background-color 0.14s ease;
+}
+
+.search-filter-control:focus-visible {
+  outline: 0;
+  border-color: color-mix(in srgb, var(--color-accent) 46%, var(--color-border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 14%, transparent);
+}
+
+.search-filter-toggle {
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  transition: border-color 0.14s ease, background-color 0.14s ease, color 0.14s ease;
+}
+
+.search-filter-toggle:hover {
+  background: var(--color-bg-hover);
+}
+
+.search-filter-toggle:focus-within {
+  border-color: color-mix(in srgb, var(--color-accent) 46%, var(--color-border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 14%, transparent);
+}
+
+.search-filter-checkbox {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--color-accent);
+}
+
+.search-filters-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.search-filters-clear {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+
+.search-filters-clear:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+@media (max-width: 1100px) {
+  .search-filters-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .search-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .search-input-shell {
+    flex-basis: 100%;
+  }
+
+  .search-filters-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .search-filter-toggle {
+    width: 100%;
+  }
+}
