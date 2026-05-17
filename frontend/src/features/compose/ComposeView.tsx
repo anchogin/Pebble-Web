@@ -76,6 +76,7 @@ function ComposeViewInner({ accounts }: { accounts: Account[] }) {
     return "";
   });
   const [sendError, setSendError] = useState<string | null>(null);
+  const sendingRef = useRef(false);
   const sendMutation = useSendEmailMutation();
 
   // ─── Editor ──────────────────────────────────────────────────────────────────
@@ -157,11 +158,17 @@ function ComposeViewInner({ accounts }: { accounts: Account[] }) {
   }, [sendError]);
 
   async function handleSend() {
+    if (sendingRef.current) return;
+    sendingRef.current = true;
+
     const finalTo = mergePendingRecipient(to, toInputValue).filter(Boolean);
     const finalCc = mergePendingRecipient(cc, ccInputValue).filter(Boolean);
     const finalBcc = mergePendingRecipient(bcc, bccInputValue).filter(Boolean);
 
-    if (!fromAccountId || finalTo.length === 0) return;
+    if (!fromAccountId || finalTo.length === 0) {
+      sendingRef.current = false;
+      return;
+    }
 
     setTo(finalTo);
     setCc(finalCc);
@@ -176,7 +183,10 @@ function ComposeViewInner({ accounts }: { accounts: Account[] }) {
         message: t("compose.noSubjectConfirm", "Send without a subject?"),
         confirmLabel: t("common.send", "Send"),
       });
-      if (!confirmed) return;
+      if (!confirmed) {
+        sendingRef.current = false;
+        return;
+      }
     }
 
     setSendError(null);
@@ -219,6 +229,9 @@ function ComposeViewInner({ accounts }: { accounts: Account[] }) {
         attachmentPaths: attachments.length > 0 ? attachments.map((a) => a.path) : undefined,
       },
       {
+        onSettled: () => {
+          sendingRef.current = false;
+        },
         onSuccess: () => {
           const draftIdsToDelete = { ...draftIdsByAccountRef.current };
           if (draftIdRef.current && fromAccountId) {

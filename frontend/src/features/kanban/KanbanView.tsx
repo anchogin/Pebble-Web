@@ -45,6 +45,8 @@ export default function KanbanView() {
         }
         return next;
       });
+    }).catch((err) => {
+      console.error("Failed to load kanban card messages:", err);
     });
     return () => { cancelled = true; };
   }, [cards]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -103,7 +105,13 @@ export default function KanbanView() {
       action: {
         label: t("kanban.undoRemove", "Undo"),
         onClick: () => {
-          moveToKanban(messageId, oldColumn).then(() => fetchCards());
+          moveToKanban(messageId, oldColumn).then(() => fetchCards()).catch(() => {
+            useToastStore.getState().addToast({
+              message: t("kanban.undoFailed", "Failed to restore card"),
+              type: "error",
+            });
+            fetchCards();
+          });
         },
       },
     });

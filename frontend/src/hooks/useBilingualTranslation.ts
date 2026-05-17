@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { translateText } from "@/lib/api";
 import { sanitizeHtml } from "@/lib/sanitizeHtml";
 import type { Message, RenderedHtml, TranslateResult } from "@/lib/api";
@@ -19,6 +19,7 @@ export function useBilingualTranslation(
   const [bilingualMode, setBilingualMode] = useState(false);
   const [bilingualResult, setBilingualResult] = useState<TranslateResult | null>(null);
   const [bilingualLoading, setBilingualLoading] = useState(false);
+  const loadingRef = useRef(false);
 
   async function handleBilingualToggle() {
     if (bilingualMode) {
@@ -26,6 +27,8 @@ export function useBilingualTranslation(
       return;
     }
     if (!message || !messageId) return;
+    if (loadingRef.current) return;
+    loadingRef.current = true;
 
     const uiLang = localStorage.getItem("pebble-language") || "zh";
     const cacheKey = `${messageId}:${uiLang}`;
@@ -105,6 +108,7 @@ export function useBilingualTranslation(
       addToast({ message: `Translation failed: ${extractErrorMessage(err)}`, type: "error" });
     } finally {
       setBilingualLoading(false);
+      loadingRef.current = false;
     }
   }
 

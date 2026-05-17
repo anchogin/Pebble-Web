@@ -140,14 +140,14 @@ pub async fn save_draft(
 
 pub async fn delete_draft(
     State(state): State<AppStateRef>,
-    Path((_account_id, draft_id)): Path<(String, String)>,
+    Path((account_id, draft_id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     state
         .store
         .with_write_async(move |conn| {
             conn.execute(
-                "DELETE FROM messages WHERE id = ?1",
-                rusqlite::params![draft_id],
+                "DELETE FROM messages WHERE id = ?1 AND account_id = ?2 AND is_draft = 1",
+                rusqlite::params![draft_id, account_id],
             )?;
             Ok(())
         })

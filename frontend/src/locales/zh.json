@@ -59,7 +59,8 @@
     "addAccountHint": "添加邮箱账户以开始使用",
     "messageView": "邮件视图",
     "threadView": "会话视图",
-    "messageList": "邮件列表"
+    "messageList": "邮件列表",
+    "threadList": "会话列表"
   },
   "compose": {
     "newMessage": "新邮件",
@@ -118,7 +119,8 @@
       "htmlPlaceholder": "编写原始 HTML...",
       "showPreview": "显示预览",
       "hidePreview": "隐藏预览",
-      "preview": "预览"
+      "preview": "预览",
+      "label": "撰写模式"
     },
     "showQuotedReply": "显示引用原文",
     "hideQuotedReply": "隐藏引用原文",
@@ -130,7 +132,9 @@
     "mailtoReplaceDraftTitle": "打开邮件链接？",
     "mailtoReplaceDraftConfirm": "打开这个邮件链接会丢弃当前未保存的草稿，是否继续？",
     "mailtoSkippedLinks": "已打开第一个邮件链接，另有 {{count}} 个链接已跳过。",
-    "mailtoSkippedLinks_other": "已打开第一个邮件链接，另有 {{count}} 个链接已跳过。"
+    "mailtoSkippedLinks_other": "已打开第一个邮件链接，另有 {{count}} 个链接已跳过。",
+    "attachmentStageError": "附件添加失败",
+    "draftCleanupFailed": "草稿清理失败"
   },
   "settings": {
     "accounts": "账户",
@@ -299,7 +303,8 @@
     "checkFailed": "检查更新失败",
     "links": "链接",
     "sourceCode": "源代码",
-    "reportIssue": "反馈问题"
+    "reportIssue": "反馈问题",
+    "openDiagnosticLog": "打开诊断日志"
   },
   "status": {
     "ready": "就绪",
@@ -405,7 +410,10 @@
     "emptyTrashFailed": "清空废纸篓失败",
     "restore": "恢复",
     "kanbanSuccess": "已加入看板",
-    "kanbanFailed": "加入看板失败"
+    "kanbanFailed": "加入看板失败",
+    "spamSuccess": "已标记为垃圾邮件",
+    "spamFailed": "标记垃圾邮件失败",
+    "reportSpam": "举报垃圾邮件"
   },
   "snooze": {
     "failed": "稍后提醒失败",
@@ -438,7 +446,8 @@
     "undoRemove": "撤销",
     "note": "看板备注",
     "contextNoteAdded": "已把选中文本加入看板备注",
-    "contextNoteFailed": "加入看板备注失败"
+    "contextNoteFailed": "加入看板备注失败",
+    "undoFailed": "恢复卡片失败"
   },
   "accountSetup": {
     "title": "添加邮箱账户",
@@ -660,5 +669,12 @@
   },
   "messageDetail": {
     "body": "邮件正文"
+  },
+  "login": {
+    "title": "Pebble Web",
+    "password": "密码",
+    "loggingIn": "登录中...",
+    "submit": "登录",
+    "invalidPassword": "密码错误"
   }
 }

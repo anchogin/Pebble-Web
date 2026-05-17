@@ -86,6 +86,20 @@ html, body, #root {
   backdrop-filter: blur(18px);
 }
 
+.app-shell-content {
+  background-color: var(--color-sidebar-bg);
+}
+
+.app-main-scroll {
+  background-color: var(--color-main-bg);
+  border-top-left-radius: 10px;
+  box-shadow: -1px 0 3px rgba(0, 0, 0, 0.04), 0 -1px 3px rgba(0, 0, 0, 0.03);
+}
+
+[data-theme="dark"] .app-main-scroll {
+  box-shadow: -1px 0 3px rgba(0, 0, 0, 0.15), 0 -1px 3px rgba(0, 0, 0, 0.1);
+}
+
 .app-shell--with-background .app-main-scroll {
   background-color: color-mix(in srgb, var(--color-main-bg) 68%, transparent);
   backdrop-filter: blur(16px) saturate(1.02);

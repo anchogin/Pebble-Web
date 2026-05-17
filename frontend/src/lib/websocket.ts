@@ -41,9 +41,14 @@ class WebSocketClient {
       }
     };
 
-    this.ws.onclose = () => {
+    this.ws.onclose = (event) => {
+      const wasAuthenticated = this.authenticated;
       this.authenticated = false;
-      this.reconnectTimer = setTimeout(() => this.connect(), 5000);
+      // Do not reconnect if the connection was closed due to auth failure
+      // (close code 1008 = policy violation, or never authenticated successfully)
+      if (wasAuthenticated && event.code !== 1008) {
+        this.reconnectTimer = setTimeout(() => this.connect(), 5000);
+      }
     };
 
     this.ws.onerror = () => {

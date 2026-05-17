@@ -1,5 +1,6 @@
 import { useRef, useLayoutEffect } from "react";
 import { sanitizeHtml } from "@/lib/sanitizeHtml";
+import { useComposeStore } from "@/stores/compose.store";
 
 interface ShadowDomEmailProps {
   html: string;
@@ -7,7 +8,19 @@ interface ShadowDomEmailProps {
 }
 
 function openMailtoUrl(url: string) {
-  window.location.href = url;
+  try {
+    const parsed = new URL(url);
+    const to = parsed.pathname ? [parsed.pathname] : [];
+    const cc = parsed.searchParams.get("cc")?.split(",").filter(Boolean) ?? [];
+    const bcc = parsed.searchParams.get("bcc")?.split(",").filter(Boolean) ?? [];
+    const subject = parsed.searchParams.get("subject") ?? undefined;
+    const body = parsed.searchParams.get("body") ?? undefined;
+    useComposeStore.getState().openCompose("new", null, { to, cc, bcc, subject, body });
+  } catch {
+    // Fallback: open compose with the raw mailto address
+    const address = url.replace(/^mailto:/i, "").split("?")[0];
+    useComposeStore.getState().openCompose("new", null, { to: address ? [address] : [] });
+  }
 }
 
 export function ShadowDomEmail({ html, className }: ShadowDomEmailProps) {

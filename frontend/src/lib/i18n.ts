@@ -12,7 +12,7 @@ i18n.use(initReactI18next).init({
     zh: { translation: zh },
   },
   lng: initialLanguage,
-  fallbackLng: "zh",
+  fallbackLng: "en",
   interpolation: { escapeValue: false },
 });
 

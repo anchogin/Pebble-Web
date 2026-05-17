@@ -175,7 +175,6 @@ export default function Sidebar() {
         width: sidebarCollapsed ? "48px" : "200px",
         flexShrink: 0,
         backgroundColor: "var(--color-sidebar-bg)",
-        borderRight: "1px solid var(--color-border)",
         transition: "width 150ms ease",
         display: "flex",
         flexDirection: "column",

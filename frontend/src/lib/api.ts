@@ -552,11 +552,13 @@ export async function sendEmail(
 
 export async function stageComposeAttachment(filename: string, bytes: number[]): Promise<string> {
   const uint8 = new Uint8Array(bytes);
-  let binary = "";
-  for (let i = 0; i < uint8.length; i++) {
-    binary += String.fromCharCode(uint8[i]);
+  // Efficient base64 conversion
+  const chunks: string[] = [];
+  const chunkSize = 0x8000;
+  for (let i = 0; i < uint8.length; i += chunkSize) {
+    chunks.push(String.fromCharCode.apply(null, uint8.subarray(i, i + chunkSize) as unknown as number[]));
   }
-  const data = btoa(binary);
+  const data = btoa(chunks.join(''));
   const res = await api.post<{ path: string }>("/compose/attachment", { filename, data });
   return res.data.path;
 }

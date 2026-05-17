@@ -87,12 +87,31 @@ pub async fn download_attachment(
 
     let file_path = match &attachment.local_path {
         Some(path) => std::path::PathBuf::from(path),
-        None => attachments_dir
-            .join(&attachment.message_id)
-            .join(&attachment.filename),
+        None => {
+            // Sanitize filename by stripping path separators
+            let safe_filename = std::path::Path::new(&attachment.filename)
+                .file_name()
+                .and_then(|f| f.to_str())
+                .unwrap_or("attachment")
+                .to_string();
+            attachments_dir
+                .join(&attachment.message_id)
+                .join(&safe_filename)
+        }
     };
 
-    let file = tokio::fs::File::open(&file_path)
+    // Validate resolved path is within the allowed attachments directory
+    let allowed_dir = attachments_dir.canonicalize().unwrap_or_else(|_| attachments_dir.clone());
+    let canonical_path = file_path.canonicalize().map_err(|_| {
+        ApiError::NotFound("Attachment file not found".to_string())
+    })?;
+    if !canonical_path.starts_with(&allowed_dir) {
+        return Err(ApiError::BadRequest(
+            "Attachment path outside allowed directory".to_string(),
+        ));
+    }
+
+    let file = tokio::fs::File::open(&canonical_path)
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to open file: {e}")))?;
 

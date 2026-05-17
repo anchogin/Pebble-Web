@@ -59,7 +59,8 @@
     "addAccountHint": "Add an email account to get started",
     "messageView": "Message view",
     "threadView": "Thread view",
-    "messageList": "Message list"
+    "messageList": "Message list",
+    "threadList": "Threads"
   },
   "compose": {
     "newMessage": "New Message",
@@ -118,7 +119,8 @@
       "htmlPlaceholder": "Write raw HTML...",
       "showPreview": "Show preview",
       "hidePreview": "Hide preview",
-      "preview": "Preview"
+      "preview": "Preview",
+      "label": "Compose mode"
     },
     "showQuotedReply": "Show quoted message",
     "hideQuotedReply": "Hide quoted message",
@@ -130,7 +132,9 @@
     "mailtoReplaceDraftTitle": "Open mail link?",
     "mailtoReplaceDraftConfirm": "Opening this mail link will discard your unsaved draft. Continue?",
     "mailtoSkippedLinks": "Opened the first mail link. {{count}} additional link was skipped.",
-    "mailtoSkippedLinks_other": "Opened the first mail link. {{count}} additional links were skipped."
+    "mailtoSkippedLinks_other": "Opened the first mail link. {{count}} additional links were skipped.",
+    "attachmentStageError": "Failed to attach file",
+    "draftCleanupFailed": "Failed to clean up draft"
   },
   "settings": {
     "accounts": "Accounts",
@@ -299,7 +303,8 @@
     "checkFailed": "Failed to check for updates",
     "links": "Links",
     "sourceCode": "Source Code",
-    "reportIssue": "Report an Issue"
+    "reportIssue": "Report an Issue",
+    "openDiagnosticLog": "Open diagnostic log"
   },
   "status": {
     "ready": "Ready",
@@ -405,7 +410,10 @@
     "emptyTrashFailed": "Failed to empty trash",
     "restore": "Restore",
     "kanbanSuccess": "Added to kanban board",
-    "kanbanFailed": "Failed to add to kanban"
+    "kanbanFailed": "Failed to add to kanban",
+    "spamSuccess": "Marked as spam",
+    "spamFailed": "Failed to mark as spam",
+    "reportSpam": "Report spam"
   },
   "snooze": {
     "failed": "Snooze failed",
@@ -438,7 +446,8 @@
     "undoRemove": "Undo",
     "note": "Kanban note",
     "contextNoteAdded": "Added selected text to Kanban note",
-    "contextNoteFailed": "Failed to add Kanban note"
+    "contextNoteFailed": "Failed to add Kanban note",
+    "undoFailed": "Failed to restore card"
   },
   "accountSetup": {
     "title": "Add Email Account",
@@ -660,5 +669,12 @@
   },
   "messageDetail": {
     "body": "Message body"
+  },
+  "login": {
+    "title": "Pebble Web",
+    "password": "Password",
+    "loggingIn": "Logging in...",
+    "submit": "Login",
+    "invalidPassword": "Invalid password"
   }
 }

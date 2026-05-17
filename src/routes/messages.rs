@@ -633,10 +633,42 @@ pub async fn restore_message(
     store
         .with_write_async(move |conn| {
             let now = pebble_core::now_timestamp();
-            conn.execute(
+            let tx = conn.unchecked_transaction()?;
+
+            // Clear soft-delete flags
+            tx.execute(
                 "UPDATE messages SET is_deleted = 0, deleted_at = NULL, updated_at = ?1 WHERE id = ?2",
                 rusqlite::params![now, message_id],
             )?;
+
+            // Find the account_id for this message
+            let account_id: String = tx.query_row(
+                "SELECT account_id FROM messages WHERE id = ?1",
+                rusqlite::params![message_id],
+                |row| row.get(0),
+            ).map_err(|_| pebble_core::PebbleError::Storage("Message not found".to_string()))?;
+
+            // Find the inbox folder for this account
+            let inbox_folder_id: Option<String> = tx.query_row(
+                "SELECT id FROM folders WHERE account_id = ?1 AND role = 'inbox'",
+                rusqlite::params![account_id],
+                |row| row.get(0),
+            ).optional()
+            .map_err(|e| pebble_core::PebbleError::Storage(e.to_string()))?;
+
+            // Move message to inbox if inbox folder exists
+            if let Some(folder_id) = inbox_folder_id {
+                tx.execute(
+                    "DELETE FROM message_folders WHERE message_id = ?1",
+                    rusqlite::params![message_id],
+                )?;
+                tx.execute(
+                    "INSERT INTO message_folders (message_id, folder_id) VALUES (?1, ?2)",
+                    rusqlite::params![message_id, folder_id],
+                )?;
+            }
+
+            tx.commit()?;
             Ok(())
         })
         .await
