@@ -6,8 +6,8 @@ services:
     volumes:
       - pebble-data:/data
     environment:
-      - PEBBLE_PASSWORD=changeme
-      - PEBBLE_JWT_SECRET=change-this-to-a-random-string
+      - PEBBLE_PASSWORD=your-password-here
+      - PEBBLE_JWT_SECRET=your-random-secret-at-least-32-chars
       - PEBBLE_DATA_DIR=/data
       - PEBBLE_PORT=8080
       - PEBBLE_SYNC_INTERVAL=300
