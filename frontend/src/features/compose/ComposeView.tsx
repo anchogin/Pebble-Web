@@ -20,6 +20,7 @@ import { deleteDraft, stageComposeAttachment } from "@/lib/api";
 import { appendReplyQuoteHtml, useComposeEditor } from "@/hooks/useComposeEditor";
 import { useConfirmStore } from "@/stores/confirm.store";
 import { useToastStore } from "@/stores/toast.store";
+import { ShadowDomEmail } from "@/components/ShadowDomEmail";
 import type { Account } from "@/lib/ipc-types";
 import type { ComposeAttachment } from "./compose-draft";
 import { ModeButton, EditorToolbar, MarkdownToolbar, composeStyles } from "./ComposeToolbar";
@@ -132,14 +133,32 @@ function ComposeViewInner({ accounts }: { accounts: Account[] }) {
     }
   }
 
+  const stagingRef = useRef(false);
+  const MAX_ATTACHMENT_SIZE = 25 * 1024 * 1024; // 25 MB
+
   async function stageAttachmentFiles(files: FileList | File[]) {
-    const staged: ComposeAttachment[] = [];
-    for (const file of Array.from(files)) {
-      const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
-      const path = await stageComposeAttachment(file.name, bytes);
-      staged.push({ name: file.name, path, size: file.size });
+    if (stagingRef.current) return;
+    stagingRef.current = true;
+    try {
+      const staged: ComposeAttachment[] = [];
+      for (const file of Array.from(files)) {
+        if (file.size > MAX_ATTACHMENT_SIZE) {
+          useToastStore.getState().addToast({
+            message: t("compose.attachmentTooLarge", { name: file.name, limit: "25 MB" }),
+            type: "error",
+          });
+          continue;
+        }
+        const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
+        const path = await stageComposeAttachment(file.name, bytes);
+        staged.push({ name: file.name, path, size: file.size });
+      }
+      if (staged.length > 0) {
+        setAttachments((prev) => [...prev, ...staged]);
+      }
+    } finally {
+      stagingRef.current = false;
     }
-    setAttachments((prev) => [...prev, ...staged]);
   }
 
   async function handleSaveTemplate() {
@@ -199,9 +218,8 @@ function ComposeViewInner({ accounts }: { accounts: Account[] }) {
       bodyText = editor.getText();
     } else if (editorMode === "html") {
       bodyHtml = rawSource;
-      const tmp = document.createElement("div");
-      tmp.innerHTML = rawSource;
-      bodyText = tmp.textContent || tmp.innerText || "";
+      const parsed = new DOMParser().parseFromString(rawSource, "text/html");
+      bodyText = parsed.body.textContent || "";
     } else {
       if (editor) {
         editor.commands.setContent(rawSource);
@@ -765,9 +783,9 @@ function ComposeViewInner({ accounts }: { accounts: Account[] }) {
                     : t("compose.showQuotedReply", "Show quoted message")}
                 </button>
                 {showQuotedReply && (
-                  <div
+                  <ShadowDomEmail
+                    html={quotedReplyHtml}
                     className="scroll-region compose-quoted-reply-content"
-                    dangerouslySetInnerHTML={{ __html: quotedReplyHtml }}
                   />
                 )}
               </div>

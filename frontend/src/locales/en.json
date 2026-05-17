@@ -134,6 +134,7 @@
     "mailtoSkippedLinks": "Opened the first mail link. {{count}} additional link was skipped.",
     "mailtoSkippedLinks_other": "Opened the first mail link. {{count}} additional links were skipped.",
     "attachmentStageError": "Failed to attach file",
+    "attachmentTooLarge": "\"{{name}}\" exceeds the {{limit}} size limit",
     "draftCleanupFailed": "Failed to clean up draft"
   },
   "settings": {

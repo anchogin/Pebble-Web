@@ -134,6 +134,7 @@
     "mailtoSkippedLinks": "已打开第一个邮件链接，另有 {{count}} 个链接已跳过。",
     "mailtoSkippedLinks_other": "已打开第一个邮件链接，另有 {{count}} 个链接已跳过。",
     "attachmentStageError": "附件添加失败",
+    "attachmentTooLarge": "\"{{name}}\" 超出 {{limit}} 大小限制",
     "draftCleanupFailed": "草稿清理失败"
   },
   "settings": {
