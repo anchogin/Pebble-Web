@@ -5,6 +5,7 @@ use pebble_search::TantivySearch;
 use pebble_store::Store;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::broadcast;
 
 pub type AppStateRef = Arc<AppState>;
 
@@ -15,6 +16,7 @@ pub struct AppState {
     pub crypto: Arc<CryptoService>,
     pub attachments_dir: PathBuf,
     pub sync_manager: Arc<SyncManager>,
+    pub ws_broadcast: broadcast::Sender<String>,
 }
 
 impl AppState {
@@ -39,11 +41,14 @@ impl AppState {
         let store = Arc::new(store);
         let crypto = Arc::new(crypto);
 
+        let (ws_broadcast, _) = broadcast::channel(100);
+
         let sync_manager = Arc::new(SyncManager::new(
             store.clone(),
             crypto.clone(),
             attachments_dir.clone(),
             config.sync_interval_secs,
+            ws_broadcast.clone(),
         ));
 
         Ok(Self {
@@ -53,6 +58,7 @@ impl AppState {
             crypto,
             attachments_dir,
             sync_manager,
+            ws_broadcast,
         })
     }
 }

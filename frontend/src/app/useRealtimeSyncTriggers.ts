@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useAccountsQuery } from "@/hooks/queries";
 import { startSync, triggerSync } from "@/lib/api";
+import { wsClient } from "@/lib/websocket";
 import { useMailStore } from "@/stores/mail.store";
 import { useUIStore } from "@/stores/ui.store";
 
@@ -11,6 +13,7 @@ interface SyncAccount {
 const EMPTY_ACCOUNTS: SyncAccount[] = [];
 
 export function useRealtimeSyncTriggers() {
+  const queryClient = useQueryClient();
   const activeAccountId = useMailStore((s) => s.activeAccountId);
   const networkStatus = useUIStore((s) => s.networkStatus);
   const pollInterval = useUIStore((s) => s.pollInterval);
@@ -79,4 +82,24 @@ export function useRealtimeSyncTriggers() {
       }
     }
   }, [accountIds, networkStatus, pollInterval, realtimeMode]);
+
+  // WebSocket connection for realtime sync notifications
+  useEffect(() => {
+    wsClient.connect();
+
+    const handler = (msg: any) => {
+      if (msg.type === "sync_complete" || msg.type === "new_mail") {
+        queryClient.invalidateQueries({ queryKey: ["messages"] });
+        queryClient.invalidateQueries({ queryKey: ["folders"] });
+        queryClient.invalidateQueries({ queryKey: ["threads"] });
+      }
+    };
+
+    wsClient.on("*", handler);
+
+    return () => {
+      wsClient.off("*", handler);
+      wsClient.disconnect();
+    };
+  }, [queryClient]);
 }

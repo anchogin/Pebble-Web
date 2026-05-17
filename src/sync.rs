@@ -6,7 +6,7 @@ use pebble_core::ProviderType;
 use pebble_crypto::CryptoService;
 use pebble_mail::{ConnectionSecurity, ImapConfig, ImapMailProvider, SyncConfig, SyncTrigger, SyncWorker};
 use pebble_store::Store;
-use tokio::sync::{mpsc, watch, Mutex};
+use tokio::sync::{broadcast, mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
 
@@ -26,6 +26,7 @@ pub struct SyncManager {
     crypto: Arc<CryptoService>,
     attachments_dir: PathBuf,
     sync_interval_secs: u64,
+    ws_tx: broadcast::Sender<String>,
 }
 
 impl SyncManager {
@@ -34,6 +35,7 @@ impl SyncManager {
         crypto: Arc<CryptoService>,
         attachments_dir: PathBuf,
         sync_interval_secs: u64,
+        ws_tx: broadcast::Sender<String>,
     ) -> Self {
         Self {
             handles: Mutex::new(HashMap::new()),
@@ -41,6 +43,7 @@ impl SyncManager {
             crypto,
             attachments_dir,
             sync_interval_secs,
+            ws_tx,
         }
     }
 
@@ -120,9 +123,24 @@ impl SyncManager {
         };
 
         let account_id_owned = account_id.to_string();
+        let ws_tx = self.ws_tx.clone();
         let task = tokio::spawn(async move {
             info!("Sync worker started for account {}", account_id_owned);
+            let _ = ws_tx.send(
+                serde_json::json!({
+                    "type": "sync_started",
+                    "account_id": account_id_owned,
+                })
+                .to_string(),
+            );
             worker.run(sync_config, Some(trigger_rx)).await;
+            let _ = ws_tx.send(
+                serde_json::json!({
+                    "type": "sync_complete",
+                    "account_id": account_id_owned,
+                })
+                .to_string(),
+            );
             info!("Sync worker stopped for account {}", account_id_owned);
         });
 
@@ -150,6 +168,14 @@ impl SyncManager {
             .trigger_tx
             .send(SyncTrigger::Manual)
             .map_err(|_| "Sync worker channel closed".to_string())?;
+
+        let _ = self.ws_tx.send(
+            serde_json::json!({
+                "type": "sync_started",
+                "account_id": account_id,
+            })
+            .to_string(),
+        );
 
         Ok(())
     }

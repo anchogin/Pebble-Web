@@ -10,6 +10,7 @@ pub mod sync;
 pub mod threads;
 
 use crate::state::AppStateRef;
+use crate::ws;
 use axum::{
     middleware,
     routing::{delete, get, post, put},
@@ -22,7 +23,8 @@ pub fn build_router(state: AppStateRef, static_dir: &str) -> Router {
 
     let public_routes = Router::new()
         .route("/api/v1/health", get(health::health))
-        .route("/api/v1/auth/login", post(auth::login));
+        .route("/api/v1/auth/login", post(auth::login))
+        .route("/api/v1/ws", get(ws::ws_handler));
 
     let protected_routes = Router::new()
         // Accounts

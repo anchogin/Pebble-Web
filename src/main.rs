@@ -5,6 +5,7 @@ mod error;
 mod routes;
 mod state;
 mod sync;
+mod ws;
 
 use crate::config::Config;
 use crate::state::{AppState, AppStateRef};
