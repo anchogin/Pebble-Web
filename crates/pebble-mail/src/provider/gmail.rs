@@ -1,16 +1,21 @@
 use std::sync::RwLock;
 
 use async_trait::async_trait;
+use base64::{engine::general_purpose, Engine as _};
+use tokio::sync::mpsc;
+use crate::sync::SyncLogEntry;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
+use chrono::Utc;
+use mailparse;
 
 use super::http_client_with_proxy;
 use crate::parser::{AttachmentData, AttachmentMeta};
-use pebble_core::traits::*;
+use pebble_core::traits::{AuthCredentials, ChangeSet, DraftProvider, FolderProvider, MailProvider, MailTransport, OutgoingMessage, SyncCursor, FetchQuery, FetchResult};
 use pebble_core::{
-    new_id, now_timestamp, DraftMessage, EmailAddress, Folder, FolderRole, FolderType,
-    HttpProxyConfig, Message, PebbleError, ProviderCapabilities, Result,
+    new_id, now_timestamp, DraftMessage, EmailAddress, Folder, FolderRole, FolderType, HttpProxyConfig, Message,
+    PebbleError, ProviderCapabilities, Result,
 };
 
 const GMAIL_API_BASE: &str = "https://www.googleapis.com/gmail/v1/users/me";
@@ -142,6 +147,20 @@ pub struct GmailFetchedMessage {
     pub attachments: Vec<AttachmentData>,
 }
 
+pub fn visible_label_ids(label_ids: &[impl AsRef<str>]) -> Vec<String> {
+    label_ids
+        .iter()
+        .filter_map(|id| {
+            let id = id.as_ref();
+            if id.starts_with("CATEGORY_") || matches!(id, "IMPORTANT" | "STARRED" | "UNREAD" | "CHAT") {
+                None
+            } else {
+                Some(id.to_string())
+            }
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone)]
 struct GmailAttachmentDescriptor {
     filename: String,
@@ -160,13 +179,33 @@ struct GmailAttachmentDescriptor {
 pub struct GmailProvider {
     client: Client,
     access_token: RwLock<String>,
+    log_tx: Option<mpsc::UnboundedSender<SyncLogEntry>>,
 }
 
 impl GmailProvider {
+    fn emit_log(&self, action: &str, request: &str) {
+        if let Some(tx) = &self.log_tx {
+            let _ = tx.send(SyncLogEntry {
+                timestamp: Utc::now().timestamp() as u64,
+                level: "info".to_string(),
+                server: "gmail.googleapis.com".to_string(),
+                action: action.to_string(),
+                request: Some(request.to_string()),
+                ..Default::default()
+            });
+        }
+    }
+
+    pub fn with_log_tx(mut self, tx: mpsc::UnboundedSender<SyncLogEntry>) -> Self {
+        self.log_tx = Some(tx);
+        self
+    }
+
     pub fn new(access_token: String) -> Self {
         Self {
             client: Client::new(),
             access_token: RwLock::new(access_token),
+            log_tx: None,
         }
     }
 
@@ -174,6 +213,7 @@ impl GmailProvider {
         Ok(Self {
             client: http_client_with_proxy(proxy.as_ref())?,
             access_token: RwLock::new(access_token),
+            log_tx: None,
         })
     }
 
@@ -189,6 +229,7 @@ impl GmailProvider {
     }
 
     pub(crate) async fn get(&self, url: &str) -> Result<reqwest::Response> {
+        self.emit_log("GET", url);
         self.client
             .get(url)
             .bearer_auth(self.token())
@@ -202,6 +243,7 @@ impl GmailProvider {
         url: &str,
         body: &T,
     ) -> Result<reqwest::Response> {
+        self.emit_log("POST", url);
         self.client
             .post(url)
             .bearer_auth(self.token())
@@ -212,6 +254,7 @@ impl GmailProvider {
     }
 
     async fn delete(&self, url: &str) -> Result<reqwest::Response> {
+        self.emit_log("DELETE", url);
         self.client
             .delete(url)
             .bearer_auth(self.token())
@@ -270,76 +313,45 @@ impl GmailProvider {
             .unwrap_or_default())
     }
 
-    async fn fetch_attachment_parts(
-        &self,
-        gmail_id: &str,
-        payload: &GmailPayload,
-    ) -> Result<Vec<AttachmentData>> {
-        let descriptors = collect_attachment_descriptors(payload);
-        let mut attachments = Vec::with_capacity(descriptors.len());
-
-        for descriptor in descriptors {
-            let data = match (descriptor.data, descriptor.attachment_id.as_deref()) {
-                (Some(data), _) => data,
-                (None, Some(attachment_id)) => {
-                    self.fetch_attachment_bytes(gmail_id, attachment_id).await?
-                }
-                (None, None) => Vec::new(),
-            };
-
-            attachments.push(AttachmentData {
-                meta: AttachmentMeta {
-                    filename: descriptor.filename,
-                    mime_type: descriptor.mime_type,
-                    size: descriptor.size.max(data.len()),
-                    content_id: descriptor.content_id,
-                    is_inline: descriptor.is_inline,
-                },
-                data,
-            });
+    pub async fn get_profile(&self) -> Result<(String, String)> {
+        let url = format!("{GMAIL_API_BASE}/profile");
+        let resp = self.get(&url).await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(PebbleError::Network(format!(
+                "Failed to get profile (status {status}): {text}"
+            )));
         }
 
-        Ok(attachments)
+        #[derive(Deserialize)]
+        struct ProfileResponse {
+            #[serde(rename = "emailAddress")]
+            email_address: String,
+            #[serde(rename = "historyId")]
+            history_id: String,
+        }
+
+        let profile: ProfileResponse = resp.json().await.map_err(|e| {
+            PebbleError::Network(format!("Failed to parse profile response: {e}"))
+        })?;
+
+        Ok((profile.email_address, profile.history_id))
     }
 
-    /// Fetch a single full message by its Gmail ID.
-    pub async fn fetch_full_message(&self, gmail_id: &str, account_id: &str) -> Result<Message> {
-        let fetched = self.fetch_sync_message(gmail_id, account_id).await?;
-        Ok(fetched.message)
-    }
-
-    pub async fn fetch_sync_message(
-        &self,
-        gmail_id: &str,
-        account_id: &str,
-    ) -> Result<GmailFetchedMessage> {
-        let gm = self.fetch_full_gmail_message(gmail_id).await?;
-        let visible_label_ids = visible_label_ids(gm.label_ids.as_deref().unwrap_or(&[]));
-        let attachments = if let Some(payload) = gm.payload.as_ref() {
-            self.fetch_attachment_parts(gmail_id, payload).await?
-        } else {
-            Vec::new()
-        };
-
-        Ok(GmailFetchedMessage {
-            message: Self::gmail_message_to_message(&gm, account_id),
-            visible_label_ids,
-            attachments,
-        })
-    }
-
-    /// List message IDs (and thread IDs) for a given label, with pagination.
     pub async fn list_message_ids(
         &self,
         label_id: &str,
-        max_results: u32,
+        limit: u32,
         page_token: Option<&str>,
     ) -> Result<(Vec<GmailMessageRef>, Option<String>)> {
-        let mut url =
-            format!("{GMAIL_API_BASE}/messages?labelIds={label_id}&maxResults={max_results}");
+        let mut url = format!(
+            "{GMAIL_API_BASE}/messages?labelIds={label_id}&maxResults={limit}"
+        );
         if let Some(token) = page_token {
             url.push_str(&format!("&pageToken={token}"));
         }
+
         let resp = self.get(&url).await?;
         if !resp.status().is_success() {
             let status = resp.status();
@@ -348,336 +360,323 @@ impl GmailProvider {
                 "Failed to list messages for label {label_id} (status {status}): {text}"
             )));
         }
-        let list: GmailMessageList = resp
-            .json()
-            .await
-            .map_err(|e| PebbleError::Network(format!("Failed to parse message list: {e}")))?;
-        let refs = list.messages.unwrap_or_default();
-        Ok((refs, list.next_page_token))
+
+        let list: GmailMessageList = resp.json().await.map_err(|e| {
+            PebbleError::Network(format!("Failed to parse message list: {e}"))
+        })?;
+
+        Ok((list.messages.unwrap_or_default(), list.next_page_token))
     }
 
-    /// Get the user's Gmail profile (contains historyId for sync).
-    pub async fn get_profile(&self) -> Result<(String, String)> {
-        let resp = self.get(&format!("{GMAIL_API_BASE}/profile")).await?;
-        let profile: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| PebbleError::Network(format!("Failed to parse profile: {e}")))?;
-        let email = profile["emailAddress"].as_str().unwrap_or("").to_string();
-        // historyId is a number in the API response, not a string
-        let history_id = match &profile["historyId"] {
-            serde_json::Value::String(s) => s.clone(),
-            serde_json::Value::Number(n) => n.to_string(),
-            _ => String::new(),
-        };
-        debug!(email = %email, history_id = %history_id, "Gmail profile");
-        Ok((email, history_id))
+    pub async fn fetch_sync_message(
+        &self,
+        gmail_id: &str,
+        account_id: &str,
+    ) -> Result<GmailFetchedMessage> {
+        let gmail_message = self.fetch_full_gmail_message(gmail_id).await?;
+        let (message, attachments, remote_label_ids) = self.parse_gmail_message(gmail_message, account_id).await?;
+
+        let visible_label_ids = visible_label_ids(&remote_label_ids);
+
+        Ok(GmailFetchedMessage {
+            message,
+            visible_label_ids,
+            attachments,
+        })
     }
 
-    pub async fn trash_message(&self, remote_id: &str) -> Result<()> {
-        let url = format!("{GMAIL_API_BASE}/messages/{remote_id}/trash");
-        let resp = self.post_json(&url, &serde_json::json!({})).await?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(PebbleError::Network(format!(
-                "Failed to move message to trash (status {status}): {text}"
-            )));
+    // This is a complex beast. It has to recursively walk the MIME parts.
+    async fn parse_gmail_message(
+        &self,
+        msg: GmailMessage,
+        account_id: &str,
+    ) -> Result<(Message, Vec<AttachmentData>, Vec<String>)> {
+        let headers = msg.payload.as_ref().and_then(|p| p.headers.as_ref());
+        let empty_headers = Vec::new();
+        let headers = headers.unwrap_or(&empty_headers);
+
+        let to_list = Self::get_header(headers, "To")
+            .map(parse_address_list)
+            .unwrap_or_default();
+        let from = Self::get_header(headers, "From")
+            .and_then(|val| parse_address(val))
+            .unwrap_or_default();
+
+        let date_str = Self::get_header(headers, "Date").unwrap_or_default();
+        let date = chrono::DateTime::parse_from_rfc2822(date_str).map(|dt| dt.timestamp()).unwrap_or(0);
+
+        let mut body_text = "".to_string();
+        let mut body_html = "".to_string();
+        let mut attachments = Vec::new();
+
+        if let Some(payload) = &msg.payload {
+            self.walk_payload(
+                &msg.id,
+                payload,
+                &mut body_text,
+                &mut body_html,
+                &mut attachments,
+            )
+            .await?;
         }
-        Ok(())
-    }
 
-    pub async fn untrash_message(&self, remote_id: &str) -> Result<()> {
-        let url = format!("{GMAIL_API_BASE}/messages/{remote_id}/untrash");
-        let resp = self.post_json(&url, &serde_json::json!({})).await?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(PebbleError::Network(format!(
-                "Failed to restore message from trash (status {status}): {text}"
-            )));
-        }
-        Ok(())
-    }
+        let remote_label_ids = msg.label_ids.clone().unwrap_or_default();
 
-    pub async fn delete_message_permanently(&self, remote_id: &str) -> Result<()> {
-        let url = format!("{GMAIL_API_BASE}/messages/{remote_id}");
-        let resp = self.delete(&url).await?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(PebbleError::Network(format!(
-                "Failed to permanently delete message (status {status}): {text}"
-            )));
-        }
-        Ok(())
-    }
-
-    fn gmail_message_to_message(gm: &GmailMessage, account_id: &str) -> Message {
-        let now = now_timestamp();
-        let payload = gm.payload.as_ref();
-        let headers = payload.and_then(|p| p.headers.as_ref());
-        let empty_headers: Vec<GmailHeader> = vec![];
-        let hdrs = headers.unwrap_or(&empty_headers);
-
-        debug!(
-            gmail_id = %gm.id,
-            header_count = hdrs.len(),
-            headers = ?hdrs.iter().map(|h| format!("{}={}", h.name, &h.value[..h.value.len().min(60)])).collect::<Vec<_>>(),
-            "Parsing Gmail message headers"
-        );
-
-        let subject = Self::get_header(hdrs, "Subject").unwrap_or("").to_string();
-        let from_raw = Self::get_header(hdrs, "From").unwrap_or("");
-        let (from_name, from_address) = parse_email_header(from_raw);
-        let to_raw = Self::get_header(hdrs, "To").unwrap_or("");
-        let to_list = parse_address_list(to_raw);
-        let cc_raw = Self::get_header(hdrs, "Cc").unwrap_or("");
-        let cc_list = parse_address_list(cc_raw);
-        let message_id_header = Self::get_header(hdrs, "Message-ID").map(|s| s.to_string());
-        let in_reply_to = Self::get_header(hdrs, "In-Reply-To").map(|s| s.to_string());
-        let references = Self::get_header(hdrs, "References").map(|s| s.to_string());
-
-        let date = gm
-            .internal_date
-            .as_ref()
-            .and_then(|d| d.parse::<i64>().ok())
-            .map(|ms| ms / 1000)
-            .unwrap_or(now);
-
-        let label_ids = gm.label_ids.as_deref().unwrap_or(&[]);
-        let is_read = !label_ids.iter().any(|l| l == "UNREAD");
-        let is_starred = label_ids.iter().any(|l| l == "STARRED");
-        let is_draft = label_ids.iter().any(|l| l == "DRAFT");
-
-        // Extract body content from payload
-        let (body_text, body_html_raw) = payload.map(extract_body_parts).unwrap_or_default();
-        let has_attachments = gm
-            .payload
-            .as_ref()
-            .map(has_attachment_parts)
-            .unwrap_or(false);
-
-        debug!(
-            gmail_id = %gm.id,
-            subject = %subject,
-            from_name = %from_name,
-            from_address = %from_address,
-            body_text_len = body_text.len(),
-            body_html_len = body_html_raw.len(),
-            snippet_len = gm.snippet.as_ref().map(|s| s.len()).unwrap_or(0),
-            "Parsed Gmail message"
-        );
-
-        Message {
+        let message = Message {
             id: new_id(),
             account_id: account_id.to_string(),
-            remote_id: gm.id.clone(),
-            message_id_header,
-            in_reply_to,
-            references_header: references,
-            thread_id: gm.thread_id.clone(),
-            subject,
-            snippet: gm.snippet.clone().unwrap_or_default(),
-            from_address,
-            from_name,
+            remote_id: msg.id.clone(),
+            message_id_header: Self::get_header(headers, "Message-ID").map(|s| s.to_string()),
+            in_reply_to: Self::get_header(headers, "In-Reply-To").map(|s| s.to_string()),
+            references_header: Self::get_header(headers, "References").map(|s| s.to_string()),
+            thread_id: msg.thread_id.clone(),
+            subject: Self::get_header(headers, "Subject")
+                .unwrap_or("")
+                .to_string(),
+            snippet: msg.snippet.clone().unwrap_or_default(),
+            from_address: from.1,
+            from_name: from.0.unwrap_or_default(),
             to_list,
-            cc_list,
-            bcc_list: vec![],
+            cc_list: Self::get_header(headers, "Cc")
+                .map(parse_address_list)
+                .unwrap_or_default(),
+            bcc_list: Self::get_header(headers, "Bcc")
+                .map(parse_address_list)
+                .unwrap_or_default(),
             body_text,
-            body_html_raw,
-            has_attachments,
-            is_read,
-            is_starred,
-            is_draft,
+            body_html_raw: body_html,
+            has_attachments: !attachments.is_empty(),
+            is_read: !remote_label_ids.contains(&"UNREAD".to_string()),
+            is_starred: remote_label_ids.contains(&"STARRED".to_string()),
+            is_draft: remote_label_ids.contains(&"DRAFT".to_string()),
             date,
             remote_version: None,
             is_deleted: false,
             deleted_at: None,
-            created_at: now,
-            updated_at: now,
-        }
-    }
-}
+            created_at: now_timestamp(),
+            updated_at: now_timestamp(),
+        };
 
-#[cfg(test)]
-mod proxy_tests {
-    use super::*;
-    use pebble_core::HttpProxyConfig;
-
-    #[test]
-    fn gmail_provider_accepts_socks5_proxy() {
-        let provider = GmailProvider::new_with_proxy(
-            "access-token".to_string(),
-            Some(HttpProxyConfig {
-                host: "127.0.0.1".to_string(),
-                port: 7890,
-            }),
-        );
-
-        assert!(provider.is_ok());
+        Ok((message, attachments, remote_label_ids))
     }
 
-    #[test]
-    fn gmail_provider_rejects_invalid_proxy() {
-        let err = GmailProvider::new_with_proxy(
-            "access-token".to_string(),
-            Some(HttpProxyConfig {
-                host: " ".to_string(),
-                port: 0,
-            }),
-        )
-        .err()
-        .unwrap();
+    async fn walk_payload(
+        &self,
+        gmail_id: &str,
+        payload: &GmailPayload,
+        body_text: &mut String,
+        body_html: &mut String,
+        attachments: &mut Vec<AttachmentData>,
+    ) -> Result<()> {
+        let mime_type = payload.mime_type.as_deref().unwrap_or("text/plain");
+        let has_parts = payload.parts.as_ref().map(|p| p.len()).unwrap_or(0);
+        let body_size = payload.body.as_ref().and_then(|b| b.size).unwrap_or(0);
+        let has_data = payload.body.as_ref().and_then(|b| b.data.as_deref()).map(|d| d.len()).unwrap_or(0);
+        tracing::info!("[walk] id={} mime={} parts={} body_size={} has_data={}", gmail_id, mime_type, has_parts, body_size, has_data);
 
-        assert!(err.to_string().contains("Proxy host"));
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Trait implementations
-// ---------------------------------------------------------------------------
-
-#[async_trait]
-impl MailTransport for GmailProvider {
-    async fn authenticate(&mut self, credentials: &AuthCredentials) -> Result<()> {
-        if let Some(token) = credentials
-            .data
-            .get("access_token")
-            .and_then(|v| v.as_str())
-        {
-            self.set_access_token(token.to_string());
-        }
-        // Verify by making a profile request
-        let resp = self.get(&format!("{GMAIL_API_BASE}/profile")).await?;
-        if !resp.status().is_success() {
-            return Err(PebbleError::Auth("Gmail authentication failed".to_string()));
-        }
-        debug!("Gmail authentication successful");
-        Ok(())
-    }
-
-    async fn fetch_messages(&self, query: &FetchQuery) -> Result<FetchResult> {
-        let limit = query.limit.unwrap_or(50);
-        let url = format!(
-            "{GMAIL_API_BASE}/messages?labelIds={}&maxResults={limit}",
-            query.folder_id
-        );
-        let resp = self.get(&url).await?;
-        let list: GmailMessageList = resp
-            .json()
-            .await
-            .map_err(|e| PebbleError::Network(format!("Failed to parse message list: {e}")))?;
-
-        debug!(
-            count = list.messages.as_ref().map(|m| m.len()).unwrap_or(0),
-            "Fetched Gmail message IDs"
-        );
-
-        // Gmail list endpoint only returns IDs; full message fetch would require
-        // individual GET requests for each message. Return the cursor for pagination.
-        let cursor_value = list.next_page_token.unwrap_or_default();
-        Ok(FetchResult {
-            messages: vec![],
-            cursor: SyncCursor {
-                value: cursor_value,
-            },
-        })
-    }
-
-    async fn send_message(&self, message: &OutgoingMessage) -> Result<()> {
-        let raw = build_raw_message(message)?;
-        let encoded = base64url_encode(&raw);
-        let body = serde_json::json!({ "raw": encoded });
-        let resp = self
-            .post_json(&format!("{GMAIL_API_BASE}/messages/send"), &body)
-            .await?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(PebbleError::Network(format!(
-                "Failed to send message via Gmail (status {status}): {text}"
-            )));
-        }
-        debug!("Message sent via Gmail API");
-        Ok(())
-    }
-
-    async fn sync_changes(&self, since: &SyncCursor) -> Result<ChangeSet> {
-        let url = format!("{GMAIL_API_BASE}/history?startHistoryId={}", since.value);
-        let resp = self.get(&url).await?;
-        let history: GmailHistoryList = resp
-            .json()
-            .await
-            .map_err(|e| PebbleError::Network(format!("Failed to parse history: {e}")))?;
-
-        let mut deleted = Vec::new();
-        let mut flag_changes = Vec::new();
-
-        if let Some(entries) = &history.history {
-            for entry in entries {
-                // Collect deleted message IDs
-                if let Some(ref removed) = entry.messages_deleted {
-                    for m in removed {
-                        deleted.push(m.message.id.clone());
-                    }
+        if let Some(parts) = &payload.parts {
+            if !parts.is_empty() {
+                for part in parts {
+                    Box::pin(self.walk_payload(gmail_id, part, body_text, body_html, attachments)).await?;
                 }
-                // Collect label additions as flag changes (read/starred)
-                if let Some(ref added) = entry.labels_added {
-                    for change in added {
-                        let is_read = if change.label_ids.iter().any(|l| l == "UNREAD") {
-                            Some(false)
-                        } else {
-                            None
-                        };
-                        let is_starred = if change.label_ids.iter().any(|l| l == "STARRED") {
-                            Some(true)
-                        } else {
-                            None
-                        };
-                        if is_read.is_some() || is_starred.is_some() {
-                            flag_changes.push(FlagChange {
-                                remote_id: change.message.id.clone(),
-                                is_read,
-                                is_starred,
-                            });
+                return Ok(());
+            }
+        }
+        if let Some(body) = &payload.body {
+            let size = body.size.unwrap_or(0);
+            if size > 0 {
+                let decoded: Vec<u8> = if let Some(data) = &body.data {
+                    base64url_decode(data)
+                } else if let Some(attachment_id) = &body.attachment_id {
+                    self.fetch_attachment_bytes(gmail_id, attachment_id).await?
+                } else {
+                    Vec::new()
+                };
+
+                if !decoded.is_empty() {
+                    match mime_type {
+                        "text/plain" if body_text.is_empty() => {
+                            *body_text = String::from_utf8(decoded).unwrap_or_default();
                         }
-                    }
-                }
-                // Collect label removals as flag changes
-                if let Some(ref removed) = entry.labels_removed {
-                    for change in removed {
-                        let is_read = if change.label_ids.iter().any(|l| l == "UNREAD") {
-                            Some(true)
-                        } else {
-                            None
-                        };
-                        let is_starred = if change.label_ids.iter().any(|l| l == "STARRED") {
-                            Some(false)
-                        } else {
-                            None
-                        };
-                        if is_read.is_some() || is_starred.is_some() {
-                            flag_changes.push(FlagChange {
-                                remote_id: change.message.id.clone(),
-                                is_read,
-                                is_starred,
-                            });
+                        "text/html" if body_html.is_empty() => {
+                            match String::from_utf8(decoded) {
+                                Ok(s) => {
+                                    *body_html = s;
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Gmail message {} text/html UTF-8 decode failed: {}", gmail_id, e);
+                                    *body_html = String::from_utf8_lossy(e.as_bytes()).into_owned();
+                                }
+                            }
                         }
+                        _ => {}
                     }
                 }
             }
         }
 
-        Ok(ChangeSet {
-            new_messages: vec![],
-            flag_changes,
-            moved: vec![],
-            deleted,
-            cursor: SyncCursor {
-                value: history.history_id.unwrap_or_default(),
-            },
-        })
+        let is_attachment = payload
+            .headers
+            .as_ref()
+            .and_then(|h| Self::get_header(h, "Content-Disposition"))
+            .map(|v| v.starts_with("attachment"))
+            .unwrap_or(false);
+
+        if is_attachment {
+            if let (Some(attachment_id), Some(filename), Some(body_size)) = (
+                payload.body.as_ref().and_then(|b| b.attachment_id.as_deref()),
+                payload.filename.as_deref(),
+                payload.body.as_ref().and_then(|b| b.size),
+            ) {
+                if !filename.is_empty() && body_size > 0 {
+                    let data = self.fetch_attachment_bytes(gmail_id, attachment_id).await?;
+                    attachments.push(AttachmentData {
+                        meta: AttachmentMeta {
+                            filename: filename.to_string(),
+                            mime_type: mime_type.to_string(),
+                            size: data.len(),
+                            content_id: payload
+                                .headers
+                                .as_ref()
+                                .and_then(|h| Self::get_header(h, "Content-ID"))
+                                .map(|s| s.to_string()),
+                            is_inline: false, // Heuristic
+                        },
+                        data,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn parse_address_list(value: &str) -> Vec<EmailAddress> {
+    let Ok(list) = mailparse::addrparse(value) else {
+        return vec![];
+    };
+    let mut emails = vec![];
+    for addr in list.iter() {
+        match addr {
+            mailparse::MailAddr::Single(single) => {
+                emails.push(EmailAddress {
+                    name: single.display_name.clone(),
+                    address: single.addr.clone(),
+                });
+            }
+            mailparse::MailAddr::Group(group) => {
+                for single in &group.addrs {
+                    emails.push(EmailAddress {
+                        name: single.display_name.clone(),
+                        address: single.addr.clone(),
+                    });
+                }
+            }
+        }
+    }
+    emails
+}
+
+fn parse_address(value: &str) -> Option<(Option<String>, String)> {
+    let Ok(list) = mailparse::addrparse(value) else {
+        return None;
+    };
+    for addr in list.iter() {
+        match addr {
+            mailparse::MailAddr::Single(single) => {
+                return Some((single.display_name.clone(), single.addr.clone()));
+            }
+            mailparse::MailAddr::Group(group) => {
+                if let Some(single) = group.addrs.first() {
+                    return Some((single.display_name.clone(), single.addr.clone()));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn base64url_decode(input: &str) -> Vec<u8> {
+    general_purpose::URL_SAFE_NO_PAD
+        .decode(input)
+        .or_else(|_| general_purpose::URL_SAFE.decode(input))
+        .or_else(|_| general_purpose::STANDARD_NO_PAD.decode(input))
+        .or_else(|_| general_purpose::STANDARD.decode(input))
+        .unwrap_or_default()
+}
+
+#[async_trait]
+impl FolderProvider for GmailProvider {
+    async fn list_folders(&self) -> Result<Vec<Folder>> {
+        let url = format!("{GMAIL_API_BASE}/labels");
+        let resp = self.get(&url).await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(PebbleError::Network(format!(
+                "Failed to list labels (status {status}): {text}"
+            )));
+        }
+
+        let label_list: GmailLabelList = resp
+            .json()
+            .await
+            .map_err(|e| PebbleError::Network(format!("Failed to parse labels: {e}")))?;
+
+        let mut folders = Vec::new();
+        if let Some(labels) = label_list.labels {
+            for label in labels {
+                let role = match label.id.as_str() {
+                    "INBOX" => Some(FolderRole::Inbox),
+                    "SENT" => Some(FolderRole::Sent),
+                    "DRAFT" => Some(FolderRole::Drafts),
+                    "TRASH" => Some(FolderRole::Trash),
+                    "SPAM" => Some(FolderRole::Spam),
+                    _ => None,
+                };
+
+                let folder = Folder {
+                    id: new_id(),
+                    account_id: "".to_string(), // Filled in by caller
+                    remote_id: label.id,
+                    name: label.name,
+                    folder_type: FolderType::Label,
+                    role,
+                    parent_id: None,
+                    color: None,
+                    is_system: label.label_type == Some("system".to_string()),
+                    sort_order: 0, // Filled in by caller
+                };
+                folders.push(folder);
+            }
+        }
+        Ok(folders)
+    }
+
+    async fn move_message(&self, _message_id: &str, _folder_id: &str) -> Result<String> {
+        Err(PebbleError::Internal(
+            "Gmail does not support moving messages between folders. Use labels instead.".to_string(),
+        ))
+    }
+}
+
+#[async_trait]
+impl MailTransport for GmailProvider {
+    async fn authenticate(&mut self, _credentials: &AuthCredentials) -> Result<()> {
+        // For Gmail, auth is handled via token, so this is a no-op
+        Ok(())
+    }
+
+    async fn fetch_messages(&self, _query: &FetchQuery) -> Result<FetchResult> {
+        Err(PebbleError::Internal("fetch_messages is not supported for Gmail. Use the sync worker instead.".to_string()))
+    }
+
+    async fn send_message(&self, _message: &OutgoingMessage) -> Result<()> {
+        Err(PebbleError::Internal("send_message is not yet implemented for Gmail".to_string()))
+    }
+
+    async fn sync_changes(&self, _since: &SyncCursor) -> Result<ChangeSet> {
+        Err(PebbleError::Internal("sync_changes is not supported for Gmail. Use the sync worker instead.".to_string()))
     }
 
     fn capabilities(&self) -> ProviderCapabilities {
@@ -691,1063 +690,4 @@ impl MailTransport for GmailProvider {
     }
 }
 
-#[async_trait]
-impl FolderProvider for GmailProvider {
-    async fn list_folders(&self) -> Result<Vec<Folder>> {
-        let resp = self.get(&format!("{GMAIL_API_BASE}/labels")).await?;
-        let label_list: GmailLabelList = resp
-            .json()
-            .await
-            .map_err(|e| PebbleError::Network(format!("Failed to parse labels: {e}")))?;
-        let labels = label_list.labels.unwrap_or_default();
-        Ok(labels
-            .iter()
-            .filter(|l| !is_hidden_gmail_label(&l.id))
-            .map(gmail_label_to_folder)
-            .collect())
-    }
-
-    async fn move_message(&self, remote_id: &str, to_folder_id: &str) -> Result<String> {
-        // Gmail "move" is implemented as label modification; the message ID stays the same.
-        let body = serde_json::json!({ "addLabelIds": [to_folder_id] });
-        let url = format!("{GMAIL_API_BASE}/messages/{remote_id}/modify");
-        let resp = self.post_json(&url, &body).await?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            return Err(PebbleError::Network(format!(
-                "Failed to move message (status {status})"
-            )));
-        }
-        Ok(remote_id.to_string())
-    }
-}
-
-#[async_trait]
-impl LabelProvider for GmailProvider {
-    async fn list_labels(&self) -> Result<Vec<Folder>> {
-        self.list_folders().await
-    }
-
-    async fn modify_labels(
-        &self,
-        remote_id: &str,
-        add: &[String],
-        remove: &[String],
-    ) -> Result<()> {
-        let body = serde_json::json!({
-            "addLabelIds": add,
-            "removeLabelIds": remove,
-        });
-        let url = format!("{GMAIL_API_BASE}/messages/{remote_id}/modify");
-        let resp = self.post_json(&url, &body).await?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            return Err(PebbleError::Network(format!(
-                "Failed to modify labels (status {status})"
-            )));
-        }
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl DraftProvider for GmailProvider {
-    async fn save_draft(&self, draft: &DraftMessage) -> Result<String> {
-        let raw = build_draft_raw(draft)?;
-        let encoded = base64url_encode(&raw);
-        let body = serde_json::json!({ "message": { "raw": encoded } });
-        let resp = self
-            .post_json(&format!("{GMAIL_API_BASE}/drafts"), &body)
-            .await?;
-        let gmail_draft: GmailDraft = resp
-            .json()
-            .await
-            .map_err(|e| PebbleError::Network(format!("Failed to parse draft response: {e}")))?;
-        Ok(gmail_draft.id)
-    }
-
-    async fn update_draft(&self, draft_id: &str, draft: &DraftMessage) -> Result<()> {
-        let raw = build_draft_raw(draft)?;
-        let encoded = base64url_encode(&raw);
-        let body = serde_json::json!({ "message": { "raw": encoded } });
-        let url = format!("{GMAIL_API_BASE}/drafts/{draft_id}");
-        let resp = self
-            .client
-            .put(&url)
-            .bearer_auth(self.token())
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| PebbleError::Network(format!("Failed to update draft: {e}")))?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            return Err(PebbleError::Network(format!(
-                "Failed to update draft (status {status})"
-            )));
-        }
-        Ok(())
-    }
-
-    async fn delete_draft(&self, draft_id: &str) -> Result<()> {
-        let resp = self
-            .delete(&format!("{GMAIL_API_BASE}/drafts/{draft_id}"))
-            .await?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            return Err(PebbleError::Network(format!(
-                "Failed to delete draft (status {status})"
-            )));
-        }
-        Ok(())
-    }
-
-    async fn list_drafts(&self) -> Result<Vec<DraftMessage>> {
-        let resp = self.get(&format!("{GMAIL_API_BASE}/drafts")).await?;
-        let _draft_list: GmailDraftList = resp
-            .json()
-            .await
-            .map_err(|e| PebbleError::Network(format!("Failed to list drafts: {e}")))?;
-        // Each draft requires an individual fetch for full content
-        Ok(vec![])
-    }
-}
-
-impl MailProvider for GmailProvider {
-    fn as_label_provider(&self) -> Option<&dyn LabelProvider> {
-        Some(self)
-    }
-
-    fn as_draft_provider(&self) -> Option<&dyn DraftProvider> {
-        Some(self)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Helper functions
-// ---------------------------------------------------------------------------
-
-/// Gmail system labels that should not appear as sidebar folders.
-fn is_hidden_gmail_label(id: &str) -> bool {
-    matches!(
-        id,
-        "CHAT"
-            | "IMPORTANT"
-            | "STARRED"
-            | "UNREAD"
-            | "CATEGORY_FORUMS"
-            | "CATEGORY_UPDATES"
-            | "CATEGORY_PERSONAL"
-            | "CATEGORY_PROMOTIONS"
-            | "CATEGORY_SOCIAL"
-    )
-}
-
-pub(crate) fn visible_label_ids(label_ids: &[String]) -> Vec<String> {
-    label_ids
-        .iter()
-        .filter(|label_id| !is_hidden_gmail_label(label_id))
-        .cloned()
-        .collect()
-}
-
-fn gmail_label_to_folder(label: &GmailLabel) -> Folder {
-    let role = match label.id.as_str() {
-        "INBOX" => Some(FolderRole::Inbox),
-        "SENT" => Some(FolderRole::Sent),
-        "DRAFT" => Some(FolderRole::Drafts),
-        "TRASH" => Some(FolderRole::Trash),
-        "SPAM" => Some(FolderRole::Spam),
-        _ => None,
-    };
-    let sort_order = crate::imap::folder_sort_order(&role);
-    Folder {
-        id: new_id(),
-        account_id: String::new(),
-        remote_id: label.id.clone(),
-        name: label.name.clone(),
-        folder_type: FolderType::Label,
-        role,
-        parent_id: None,
-        color: None,
-        is_system: label.label_type.as_deref() == Some("system"),
-        sort_order,
-    }
-}
-
-fn parse_email_header(raw: &str) -> (String, String) {
-    // Parse "Display Name <email@example.com>" or just "email@example.com"
-    if let Some(start) = raw.rfind('<') {
-        if let Some(end) = raw.rfind('>') {
-            let name = raw[..start].trim().trim_matches('"').to_string();
-            let addr = raw[start + 1..end].trim().to_string();
-            return (name, addr);
-        }
-    }
-    (String::new(), raw.trim().to_string())
-}
-
-fn parse_address_list(raw: &str) -> Vec<EmailAddress> {
-    if raw.is_empty() {
-        return vec![];
-    }
-    raw.split(',')
-        .map(|s| {
-            let (name, address) = parse_email_header(s.trim());
-            EmailAddress {
-                name: if name.is_empty() { None } else { Some(name) },
-                address,
-            }
-        })
-        .collect()
-}
-
-fn format_address(addr: &EmailAddress) -> String {
-    match &addr.name {
-        Some(name) => format!("{name} <{}>", addr.address),
-        None => addr.address.clone(),
-    }
-}
-
-fn validate_header_value(label: &str, value: &str) -> Result<()> {
-    if value.contains('\r') || value.contains('\n') {
-        return Err(PebbleError::Validation(format!(
-            "{label} contains invalid header characters"
-        )));
-    }
-    Ok(())
-}
-
-fn validate_email_address(label: &str, addr: &EmailAddress) -> Result<()> {
-    if let Some(name) = &addr.name {
-        validate_header_value(&format!("{label} display name"), name)?;
-    }
-    validate_header_value(&format!("{label} address"), &addr.address)
-}
-
-fn validate_email_addresses(label: &str, addrs: &[EmailAddress]) -> Result<()> {
-    for addr in addrs {
-        validate_email_address(label, addr)?;
-    }
-    Ok(())
-}
-
-fn quote_mime_param(label: &str, value: &str) -> Result<String> {
-    validate_header_value(label, value)?;
-    Ok(value.replace('\\', "\\\\").replace('"', "\\\""))
-}
-
-fn new_mime_boundary(prefix: &str) -> String {
-    format!("{prefix}-{}", new_id())
-}
-
-fn write_common_headers(
-    raw: &mut String,
-    to: &[EmailAddress],
-    cc: &[EmailAddress],
-    bcc: &[EmailAddress],
-    subject: &str,
-    in_reply_to: Option<&str>,
-) -> Result<()> {
-    validate_email_addresses("To", to)?;
-    validate_email_addresses("Cc", cc)?;
-    validate_email_addresses("Bcc", bcc)?;
-    validate_header_value("Subject", subject)?;
-    if let Some(irt) = in_reply_to {
-        validate_header_value("In-Reply-To", irt)?;
-    }
-
-    let to = to.iter().map(format_address).collect::<Vec<_>>().join(", ");
-    let cc = cc.iter().map(format_address).collect::<Vec<_>>().join(", ");
-    let bcc = bcc
-        .iter()
-        .map(format_address)
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    raw.push_str(&format!("To: {to}\r\n"));
-    raw.push_str(&format!("Subject: {subject}\r\n"));
-    if !cc.is_empty() {
-        raw.push_str(&format!("Cc: {cc}\r\n"));
-    }
-    // Gmail's raw send API derives recipients from the RFC 5322 message. Bcc
-    // must be present in the submission raw for Gmail to deliver to those
-    // recipients; Gmail is expected to strip it from delivered recipient
-    // copies. Do not remove this without replacing it with an envelope-level
-    // recipient API.
-    if !bcc.is_empty() {
-        raw.push_str(&format!("Bcc: {bcc}\r\n"));
-    }
-    if let Some(irt) = in_reply_to {
-        raw.push_str(&format!("In-Reply-To: {irt}\r\n"));
-    }
-    raw.push_str("MIME-Version: 1.0\r\n");
-    Ok(())
-}
-
-fn append_body(raw: &mut String, body_text: &str, body_html: Option<&str>) {
-    if let Some(body_html) = body_html {
-        let boundary = new_mime_boundary("pebble-gmail-boundary");
-        raw.push_str(&format!(
-            "Content-Type: multipart/alternative; boundary=\"{boundary}\"\r\n\r\n"
-        ));
-        raw.push_str(&format!(
-            "--{boundary}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n{body_text}\r\n"
-        ));
-        raw.push_str(&format!(
-            "--{boundary}\r\nContent-Type: text/html; charset=utf-8\r\n\r\n{body_html}\r\n"
-        ));
-        raw.push_str(&format!("--{boundary}--\r\n"));
-    } else {
-        raw.push_str("Content-Type: text/plain; charset=utf-8\r\n\r\n");
-        raw.push_str(body_text);
-        raw.push_str("\r\n");
-    }
-}
-
-fn build_raw_message(msg: &OutgoingMessage) -> Result<Vec<u8>> {
-    let mut raw = String::new();
-    write_common_headers(
-        &mut raw,
-        &msg.to,
-        &msg.cc,
-        &msg.bcc,
-        &msg.subject,
-        msg.in_reply_to.as_deref(),
-    )?;
-
-    if msg.attachment_paths.is_empty() {
-        append_body(&mut raw, &msg.body_text, msg.body_html.as_deref());
-    } else {
-        // multipart/mixed: body + attachments
-        let mixed_boundary = new_mime_boundary("pebble-mixed-boundary");
-        raw.push_str(&format!(
-            "Content-Type: multipart/mixed; boundary=\"{mixed_boundary}\"\r\n\r\n"
-        ));
-
-        // Body part
-        raw.push_str(&format!("--{mixed_boundary}\r\n"));
-        append_body(&mut raw, &msg.body_text, msg.body_html.as_deref());
-
-        // Attachment parts
-        for path_str in &msg.attachment_paths {
-            let path = std::path::Path::new(path_str);
-            let filename = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("attachment");
-            let filename = quote_mime_param("attachment filename", filename)?;
-            let data = match std::fs::read(path) {
-                Ok(d) => d,
-                Err(e) => {
-                    warn!("Failed to read attachment {path_str}: {e}, skipping");
-                    continue;
-                }
-            };
-            let encoded = base64_standard_encode(&data);
-            let content_type = guess_mime_type(&filename);
-
-            raw.push_str(&format!("--{mixed_boundary}\r\n"));
-            raw.push_str(&format!(
-                "Content-Type: {content_type}; name=\"{filename}\"\r\n"
-            ));
-            raw.push_str("Content-Transfer-Encoding: base64\r\n");
-            raw.push_str(&format!(
-                "Content-Disposition: attachment; filename=\"{filename}\"\r\n\r\n"
-            ));
-            // Wrap base64 at 76 chars per line per RFC 2045
-            for chunk in encoded.as_bytes().chunks(76) {
-                raw.push_str(std::str::from_utf8(chunk).unwrap_or(""));
-                raw.push_str("\r\n");
-            }
-        }
-        raw.push_str(&format!("--{mixed_boundary}--\r\n"));
-    }
-
-    Ok(raw.into_bytes())
-}
-
-fn base64_standard_encode(data: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
-        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
-        let n = (b0 << 16) | (b1 << 8) | b2;
-        out.push(ALPHABET[((n >> 18) & 0x3F) as usize] as char);
-        out.push(ALPHABET[((n >> 12) & 0x3F) as usize] as char);
-        if chunk.len() > 1 {
-            out.push(ALPHABET[((n >> 6) & 0x3F) as usize] as char);
-        } else {
-            out.push('=');
-        }
-        if chunk.len() > 2 {
-            out.push(ALPHABET[(n & 0x3F) as usize] as char);
-        } else {
-            out.push('=');
-        }
-    }
-    out
-}
-
-fn guess_mime_type(filename: &str) -> &'static str {
-    let ext = filename.rsplit('.').next().unwrap_or("").to_lowercase();
-    match ext.as_str() {
-        "pdf" => "application/pdf",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "svg" => "image/svg+xml",
-        "txt" => "text/plain",
-        "html" | "htm" => "text/html",
-        "css" => "text/css",
-        "js" => "application/javascript",
-        "json" => "application/json",
-        "xml" => "application/xml",
-        "zip" => "application/zip",
-        "gz" | "gzip" => "application/gzip",
-        "tar" => "application/x-tar",
-        "doc" => "application/msword",
-        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "xls" => "application/vnd.ms-excel",
-        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "ppt" => "application/vnd.ms-powerpoint",
-        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        "csv" => "text/csv",
-        "mp3" => "audio/mpeg",
-        "mp4" => "video/mp4",
-        "wav" => "audio/wav",
-        "eml" => "message/rfc822",
-        _ => "application/octet-stream",
-    }
-}
-
-fn build_draft_raw(draft: &DraftMessage) -> Result<Vec<u8>> {
-    let message = OutgoingMessage {
-        to: draft.to.clone(),
-        cc: draft.cc.clone(),
-        bcc: draft.bcc.clone(),
-        subject: draft.subject.clone(),
-        body_text: draft.body_text.clone(),
-        body_html: draft.body_html.clone(),
-        in_reply_to: draft.in_reply_to.clone(),
-        attachment_paths: draft.attachment_paths.clone(),
-    };
-    build_raw_message(&message)
-}
-
-/// Base64url decoding without padding (RFC 4648 section 5).
-fn base64url_decode(input: &str) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(input.len() * 3 / 4);
-    let bytes: Vec<u8> = input
-        .bytes()
-        .filter(|b| !b.is_ascii_whitespace())
-        .map(|b| match b {
-            b'A'..=b'Z' => b - b'A',
-            b'a'..=b'z' => b - b'a' + 26,
-            b'0'..=b'9' => b - b'0' + 52,
-            b'-' => 62,
-            b'_' => 63,
-            _ => 0,
-        })
-        .collect();
-
-    let chunks = bytes.chunks(4);
-    for chunk in chunks {
-        if chunk.len() >= 2 {
-            let b0 = ((chunk[0] as u32) << 18)
-                | ((chunk[1] as u32) << 12)
-                | ((chunk.get(2).copied().unwrap_or(0) as u32) << 6)
-                | (chunk.get(3).copied().unwrap_or(0) as u32);
-            buf.push((b0 >> 16) as u8);
-            if chunk.len() >= 3 {
-                buf.push((b0 >> 8) as u8);
-            }
-            if chunk.len() >= 4 {
-                buf.push(b0 as u8);
-            }
-        }
-    }
-    buf
-}
-
-/// Extract text/plain and text/html body parts from a Gmail payload, recursively.
-fn extract_body_parts(payload: &GmailPayload) -> (String, String) {
-    let mut text = String::new();
-    let mut html = String::new();
-    extract_body_recursive(payload, &mut text, &mut html);
-    (text, html)
-}
-
-fn extract_body_recursive(payload: &GmailPayload, text: &mut String, html: &mut String) {
-    let mime = payload.mime_type.as_deref().unwrap_or("");
-
-    // If this part has direct body data, decode it
-    if let Some(ref body) = payload.body {
-        if let Some(ref data) = body.data {
-            if !data.is_empty() {
-                let decoded = base64url_decode(data);
-                if let Ok(s) = String::from_utf8(decoded) {
-                    if mime == "text/plain" && text.is_empty() {
-                        *text = s;
-                    } else if mime == "text/html" && html.is_empty() {
-                        *html = s;
-                    }
-                }
-            }
-        }
-    }
-
-    // Recurse into sub-parts
-    if let Some(ref parts) = payload.parts {
-        for part in parts {
-            extract_body_recursive(part, text, html);
-        }
-    }
-}
-
-/// Check if a payload has attachment parts.
-fn has_attachment_parts(payload: &GmailPayload) -> bool {
-    !collect_attachment_descriptors(payload).is_empty()
-}
-
-fn is_attachment_part(payload: &GmailPayload) -> bool {
-    let filename = payload.filename.as_deref().unwrap_or("").trim();
-    if !filename.is_empty() {
-        return true;
-    }
-
-    payload_content_disposition(payload)
-        .is_some_and(|value| value.to_ascii_lowercase().contains("attachment"))
-        || payload_content_id(payload).is_some()
-}
-
-fn payload_content_disposition(payload: &GmailPayload) -> Option<&str> {
-    payload
-        .headers
-        .as_ref()
-        .and_then(|headers| GmailProvider::get_header(headers, "Content-Disposition"))
-}
-
-fn payload_content_id(payload: &GmailPayload) -> Option<String> {
-    payload
-        .headers
-        .as_ref()
-        .and_then(|headers| GmailProvider::get_header(headers, "Content-ID"))
-        .map(|value| value.trim_matches(|ch| ch == '<' || ch == '>').to_string())
-}
-
-fn payload_is_inline(payload: &GmailPayload) -> bool {
-    payload_content_id(payload).is_some()
-        || payload_content_disposition(payload)
-            .map(|value| value.to_ascii_lowercase().contains("inline"))
-            .unwrap_or(false)
-}
-
-fn collect_attachment_descriptors(payload: &GmailPayload) -> Vec<GmailAttachmentDescriptor> {
-    let mut attachments = Vec::new();
-    collect_attachment_descriptors_recursive(payload, &mut attachments);
-    attachments
-}
-
-fn collect_attachment_descriptors_recursive(
-    payload: &GmailPayload,
-    attachments: &mut Vec<GmailAttachmentDescriptor>,
-) {
-    if is_attachment_part(payload) {
-        let inline_data = payload
-            .body
-            .as_ref()
-            .and_then(|body| body.data.as_deref())
-            .map(base64url_decode);
-        let size = payload
-            .body
-            .as_ref()
-            .and_then(|body| body.size)
-            .map(|size| size as usize)
-            .or_else(|| inline_data.as_ref().map(Vec::len))
-            .unwrap_or_default();
-
-        attachments.push(GmailAttachmentDescriptor {
-            filename: payload
-                .filename
-                .clone()
-                .filter(|filename| !filename.trim().is_empty())
-                .unwrap_or_else(|| "unnamed_attachment".to_string()),
-            mime_type: payload
-                .mime_type
-                .clone()
-                .unwrap_or_else(|| "application/octet-stream".to_string()),
-            size,
-            content_id: payload_content_id(payload),
-            is_inline: payload_is_inline(payload),
-            data: inline_data,
-            attachment_id: payload
-                .body
-                .as_ref()
-                .and_then(|body| body.attachment_id.clone()),
-        });
-    }
-
-    if let Some(parts) = payload.parts.as_ref() {
-        for part in parts {
-            collect_attachment_descriptors_recursive(part, attachments);
-        }
-    }
-}
-
-#[cfg(test)]
-fn collect_attachment_parts(payload: &GmailPayload) -> Result<Vec<AttachmentData>> {
-    let mut attachments = Vec::new();
-    for descriptor in collect_attachment_descriptors(payload) {
-        if let Some(data) = descriptor.data {
-            attachments.push(AttachmentData {
-                meta: AttachmentMeta {
-                    filename: descriptor.filename,
-                    mime_type: descriptor.mime_type,
-                    size: descriptor.size.max(data.len()),
-                    content_id: descriptor.content_id,
-                    is_inline: descriptor.is_inline,
-                },
-                data,
-            });
-        }
-    }
-    Ok(attachments)
-}
-
-/// Base64url encoding without padding (RFC 4648 section 5).
-/// Implemented inline to avoid adding a `base64` crate dependency.
-fn base64url_encode(data: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-
-    let mut result = String::with_capacity(data.len().div_ceil(3) * 4);
-    let chunks = data.chunks(3);
-    for chunk in chunks {
-        let b0 = chunk[0] as u32;
-        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
-        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
-        let triple = (b0 << 16) | (b1 << 8) | b2;
-
-        result.push(ALPHABET[((triple >> 18) & 0x3F) as usize] as char);
-        result.push(ALPHABET[((triple >> 12) & 0x3F) as usize] as char);
-        if chunk.len() > 1 {
-            result.push(ALPHABET[((triple >> 6) & 0x3F) as usize] as char);
-        }
-        if chunk.len() > 2 {
-            result.push(ALPHABET[(triple & 0x3F) as usize] as char);
-        }
-    }
-    result
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_email_header_with_name() {
-        let (name, addr) = parse_email_header("John Doe <john@example.com>");
-        assert_eq!(name, "John Doe");
-        assert_eq!(addr, "john@example.com");
-    }
-
-    #[test]
-    fn test_parse_email_header_no_name() {
-        let (name, addr) = parse_email_header("john@example.com");
-        assert_eq!(name, "");
-        assert_eq!(addr, "john@example.com");
-    }
-
-    #[test]
-    fn test_parse_email_header_quoted_name() {
-        let (name, addr) = parse_email_header("\"Jane Doe\" <jane@example.com>");
-        assert_eq!(name, "Jane Doe");
-        assert_eq!(addr, "jane@example.com");
-    }
-
-    #[test]
-    fn test_parse_address_list() {
-        let addrs = parse_address_list("Alice <a@b.com>, bob@c.com");
-        assert_eq!(addrs.len(), 2);
-        assert_eq!(addrs[0].name, Some("Alice".to_string()));
-        assert_eq!(addrs[0].address, "a@b.com");
-        assert_eq!(addrs[1].name, None);
-        assert_eq!(addrs[1].address, "bob@c.com");
-    }
-
-    #[test]
-    fn test_parse_address_list_empty() {
-        let addrs = parse_address_list("");
-        assert!(addrs.is_empty());
-    }
-
-    #[test]
-    fn test_gmail_label_to_folder_inbox() {
-        let label = GmailLabel {
-            id: "INBOX".to_string(),
-            name: "Inbox".to_string(),
-            label_type: Some("system".to_string()),
-        };
-        let folder = gmail_label_to_folder(&label);
-        assert_eq!(folder.role, Some(FolderRole::Inbox));
-        assert_eq!(folder.folder_type, FolderType::Label);
-        assert!(folder.is_system);
-        assert_eq!(folder.remote_id, "INBOX");
-    }
-
-    #[test]
-    fn test_gmail_label_to_folder_custom() {
-        let label = GmailLabel {
-            id: "Label_123".to_string(),
-            name: "My Label".to_string(),
-            label_type: Some("user".to_string()),
-        };
-        let folder = gmail_label_to_folder(&label);
-        assert_eq!(folder.role, None);
-        assert!(!folder.is_system);
-        assert_eq!(folder.name, "My Label");
-    }
-
-    #[test]
-    fn test_gmail_label_to_folder_sent() {
-        let label = GmailLabel {
-            id: "SENT".to_string(),
-            name: "Sent".to_string(),
-            label_type: Some("system".to_string()),
-        };
-        let folder = gmail_label_to_folder(&label);
-        assert_eq!(folder.role, Some(FolderRole::Sent));
-    }
-
-    #[test]
-    fn test_capabilities() {
-        let provider = GmailProvider::new("token".to_string());
-        let caps = provider.capabilities();
-        assert!(caps.has_labels);
-        assert!(!caps.has_folders);
-        assert!(!caps.has_categories);
-        assert!(!caps.has_push);
-        assert!(caps.has_threads);
-    }
-
-    #[test]
-    fn test_base64url_encode_basic() {
-        let encoded = base64url_encode(b"Hello, World!");
-        // Verify no standard base64 chars that differ in URL-safe variant
-        assert!(!encoded.contains('+'));
-        assert!(!encoded.contains('/'));
-        assert!(!encoded.contains('='));
-        assert_eq!(encoded, "SGVsbG8sIFdvcmxkIQ");
-    }
-
-    #[test]
-    fn test_base64url_encode_empty() {
-        let encoded = base64url_encode(b"");
-        assert_eq!(encoded, "");
-    }
-
-    #[test]
-    fn test_base64url_encode_padding_cases() {
-        // 1 byte -> 2 base64 chars (no padding)
-        assert_eq!(base64url_encode(b"a"), "YQ");
-        // 2 bytes -> 3 base64 chars (no padding)
-        assert_eq!(base64url_encode(b"ab"), "YWI");
-        // 3 bytes -> 4 base64 chars (exact)
-        assert_eq!(base64url_encode(b"abc"), "YWJj");
-    }
-
-    #[test]
-    fn test_format_address_with_name() {
-        let addr = EmailAddress {
-            name: Some("Alice".to_string()),
-            address: "alice@example.com".to_string(),
-        };
-        assert_eq!(format_address(&addr), "Alice <alice@example.com>");
-    }
-
-    #[test]
-    fn test_format_address_no_name() {
-        let addr = EmailAddress {
-            name: None,
-            address: "bob@example.com".to_string(),
-        };
-        assert_eq!(format_address(&addr), "bob@example.com");
-    }
-
-    #[test]
-    fn test_build_raw_message() {
-        let msg = OutgoingMessage {
-            to: vec![EmailAddress {
-                name: None,
-                address: "test@example.com".to_string(),
-            }],
-            cc: vec![],
-            bcc: vec![],
-            subject: "Test Subject".to_string(),
-            body_text: "Hello".to_string(),
-            body_html: None,
-            in_reply_to: None,
-            attachment_paths: vec![],
-        };
-        let raw = String::from_utf8(build_raw_message(&msg).unwrap()).unwrap();
-        assert!(raw.contains("To: test@example.com"));
-        assert!(raw.contains("Subject: Test Subject"));
-        assert!(raw.contains("Hello"));
-        // Should not contain Cc header when cc is empty
-        assert!(!raw.contains("Cc:"));
-    }
-
-    #[test]
-    fn build_raw_message_rejects_crlf_header_injection() {
-        let msg = OutgoingMessage {
-            to: vec![EmailAddress {
-                name: Some("Alice\r\nBcc: victim@example.com".to_string()),
-                address: "alice@example.com".to_string(),
-            }],
-            cc: vec![],
-            bcc: vec![],
-            subject: "Hello\r\nBcc: victim@example.com".to_string(),
-            body_text: "Body".to_string(),
-            body_html: None,
-            in_reply_to: Some("<safe@example.com>\r\nX-Injected: yes".to_string()),
-            attachment_paths: vec![],
-        };
-
-        assert!(build_raw_message(&msg).is_err());
-    }
-
-    #[test]
-    fn build_raw_message_rejects_crlf_attachment_filename() {
-        let msg = OutgoingMessage {
-            to: vec![EmailAddress {
-                name: None,
-                address: "alice@example.com".to_string(),
-            }],
-            cc: vec![],
-            bcc: vec![],
-            subject: "Attachment".to_string(),
-            body_text: "Body".to_string(),
-            body_html: None,
-            in_reply_to: None,
-            attachment_paths: vec!["bad\r\nInjected.txt".to_string()],
-        };
-
-        assert!(build_raw_message(&msg).is_err());
-    }
-
-    #[test]
-    fn build_raw_message_uses_per_message_boundary() {
-        let msg = OutgoingMessage {
-            to: vec![EmailAddress {
-                name: None,
-                address: "alice@example.com".to_string(),
-            }],
-            cc: vec![],
-            bcc: vec![],
-            subject: "HTML update".to_string(),
-            body_text: "Plain text body".to_string(),
-            body_html: Some("<p>HTML body</p>".to_string()),
-            in_reply_to: None,
-            attachment_paths: vec![],
-        };
-
-        let first = String::from_utf8(build_raw_message(&msg).unwrap()).unwrap();
-        let second = String::from_utf8(build_raw_message(&msg).unwrap()).unwrap();
-
-        assert!(first.contains("pebble-gmail-boundary-"));
-        assert!(second.contains("pebble-gmail-boundary-"));
-        assert_ne!(first, second);
-    }
-
-    #[test]
-    fn test_build_raw_message_with_cc_and_reply() {
-        let msg = OutgoingMessage {
-            to: vec![EmailAddress {
-                name: Some("Alice".to_string()),
-                address: "alice@example.com".to_string(),
-            }],
-            cc: vec![EmailAddress {
-                name: None,
-                address: "bob@example.com".to_string(),
-            }],
-            bcc: vec![],
-            subject: "Re: Hello".to_string(),
-            body_text: "Reply body".to_string(),
-            body_html: None,
-            in_reply_to: Some("<msg123@example.com>".to_string()),
-            attachment_paths: vec![],
-        };
-        let raw = String::from_utf8(build_raw_message(&msg).unwrap()).unwrap();
-        assert!(raw.contains("Cc: bob@example.com"));
-        assert!(raw.contains("In-Reply-To: <msg123@example.com>"));
-    }
-
-    #[test]
-    fn test_build_raw_message_with_bcc_and_html_body() {
-        let msg = OutgoingMessage {
-            to: vec![EmailAddress {
-                name: None,
-                address: "alice@example.com".to_string(),
-            }],
-            cc: vec![],
-            bcc: vec![EmailAddress {
-                name: Some("Hidden".to_string()),
-                address: "hidden@example.com".to_string(),
-            }],
-            subject: "HTML update".to_string(),
-            body_text: "Plain text body".to_string(),
-            body_html: Some("<p><strong>HTML</strong> body</p>".to_string()),
-            in_reply_to: None,
-            attachment_paths: vec![],
-        };
-
-        let raw = String::from_utf8(build_raw_message(&msg).unwrap()).unwrap();
-        assert!(raw.contains("Bcc: Hidden <hidden@example.com>"));
-        assert!(raw.contains("multipart/alternative"));
-        assert!(raw.contains("Content-Type: text/html; charset=utf-8"));
-        assert!(raw.contains("<p><strong>HTML</strong> body</p>"));
-    }
-
-    #[test]
-    fn test_build_draft_raw_with_attachment() {
-        let path = std::env::temp_dir().join(format!("pebble-draft-{}.txt", new_id()));
-        std::fs::write(&path, b"hello").unwrap();
-        let path_string = path.to_string_lossy().into_owned();
-        let draft = DraftMessage {
-            id: None,
-            to: vec![EmailAddress {
-                name: None,
-                address: "alice@example.com".to_string(),
-            }],
-            cc: vec![],
-            bcc: vec![],
-            subject: "Draft with attachment".to_string(),
-            body_text: "See attached".to_string(),
-            body_html: None,
-            in_reply_to: None,
-            attachment_paths: vec![path_string],
-        };
-
-        let raw = String::from_utf8(build_draft_raw(&draft).unwrap()).unwrap();
-        let _ = std::fs::remove_file(path);
-
-        assert!(raw.contains("multipart/mixed"));
-        assert!(raw.contains("filename=\""));
-        assert!(raw.contains("aGVsbG8="));
-    }
-
-    #[test]
-    fn test_visible_label_ids_exclude_hidden_labels() {
-        let visible = visible_label_ids(&[
-            "INBOX".to_string(),
-            "STARRED".to_string(),
-            "Label_123".to_string(),
-            "UNREAD".to_string(),
-            "TRASH".to_string(),
-        ]);
-
-        assert_eq!(
-            visible,
-            vec![
-                "INBOX".to_string(),
-                "Label_123".to_string(),
-                "TRASH".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_collect_attachment_parts_decodes_inline_attachment_data() {
-        let payload = GmailPayload {
-            headers: None,
-            mime_type: Some("multipart/mixed".to_string()),
-            body: None,
-            parts: Some(vec![GmailPayload {
-                headers: Some(vec![GmailHeader {
-                    name: "Content-Disposition".to_string(),
-                    value: "attachment".to_string(),
-                }]),
-                mime_type: Some("application/pdf".to_string()),
-                body: Some(GmailBody {
-                    size: Some(3),
-                    data: Some(base64url_encode(b"pdf")),
-                    attachment_id: None,
-                }),
-                parts: None,
-                filename: Some("report.pdf".to_string()),
-            }]),
-            filename: None,
-        };
-
-        let attachments = collect_attachment_parts(&payload).unwrap();
-        assert_eq!(attachments.len(), 1);
-        assert_eq!(attachments[0].meta.filename, "report.pdf");
-        assert_eq!(attachments[0].meta.mime_type, "application/pdf");
-        assert_eq!(attachments[0].meta.size, 3);
-        assert_eq!(attachments[0].data, b"pdf");
-    }
-
-    #[test]
-    fn gmail_body_part_attachment_id_without_attachment_markers_is_not_attachment() {
-        let payload = GmailPayload {
-            headers: None,
-            mime_type: Some("multipart/alternative".to_string()),
-            body: None,
-            parts: Some(vec![GmailPayload {
-                headers: Some(vec![GmailHeader {
-                    name: "Content-Type".to_string(),
-                    value: "text/html; charset=utf-8".to_string(),
-                }]),
-                mime_type: Some("text/html".to_string()),
-                body: Some(GmailBody {
-                    size: Some(1024),
-                    data: None,
-                    attachment_id: Some("large-body-part".to_string()),
-                }),
-                parts: None,
-                filename: None,
-            }]),
-            filename: None,
-        };
-
-        assert!(collect_attachment_descriptors(&payload).is_empty());
-        assert!(!has_attachment_parts(&payload));
-    }
-
-    #[test]
-    fn gmail_content_id_part_is_marked_inline_even_without_disposition() {
-        let payload = GmailPayload {
-            headers: Some(vec![GmailHeader {
-                name: "Content-ID".to_string(),
-                value: "<image001@example>".to_string(),
-            }]),
-            mime_type: Some("image/png".to_string()),
-            body: Some(GmailBody {
-                size: Some(3),
-                data: Some(base64url_encode(b"png")),
-                attachment_id: None,
-            }),
-            parts: None,
-            filename: Some("image001.png".to_string()),
-        };
-
-        let descriptors = collect_attachment_descriptors(&payload);
-
-        assert_eq!(descriptors.len(), 1);
-        assert!(descriptors[0].is_inline);
-    }
-
-    #[test]
-    fn test_set_access_token() {
-        let provider = GmailProvider::new("initial".to_string());
-        assert_eq!(provider.token(), "initial");
-        provider.set_access_token("updated".to_string());
-        assert_eq!(provider.token(), "updated");
-    }
-}
+impl MailProvider for GmailProvider {}

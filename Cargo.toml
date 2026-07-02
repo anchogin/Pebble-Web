@@ -54,6 +54,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
 jsonwebtoken = { workspace = true }
 argon2 = { workspace = true }
 hex = "0.4"
@@ -67,3 +68,6 @@ pebble-search = { path = "crates/pebble-search" }
 pebble-crypto = { path = "crates/pebble-crypto" }
 pebble-mail = { path = "crates/pebble-mail" }
 pebble-translate = { path = "crates/pebble-translate" }
+pebble-oauth = { path = "crates/pebble-oauth" }
+dotenv = "0.15"
+reqwest = { workspace = true }

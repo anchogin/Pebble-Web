@@ -218,6 +218,103 @@ impl OAuthManager {
     pub async fn wait_for_redirect(&self) -> Result<OAuthRedirect, OAuthError> {
         redirect::wait_for_redirect(self.config.redirect_port).await
     }
+
+    /// Start the OAuth flow with an explicit redirect URI (for server-side callback).
+    pub async fn start_auth_with_redirect(
+        &self,
+        redirect_uri: &str,
+    ) -> Result<(String, PkceState), OAuthError> {
+        self.start_auth_with_redirect_and_state(redirect_uri, None).await
+    }
+
+    /// Start the OAuth flow with an explicit redirect URI and optional state value.
+    pub async fn start_auth_with_redirect_and_state(
+        &self,
+        redirect_uri: &str,
+        state: Option<String>,
+    ) -> Result<(String, PkceState), OAuthError> {
+        let auth_url = AuthUrl::new(self.config.auth_url.clone())
+            .map_err(|e| OAuthError::Config(format!("Invalid auth URL: {e}")))?;
+        let token_url = TokenUrl::new(self.config.token_url.clone())
+            .map_err(|e| OAuthError::Config(format!("Invalid token URL: {e}")))?;
+        let redirect_url = RedirectUrl::new(redirect_uri.to_string())
+            .map_err(|e| OAuthError::Config(format!("Invalid redirect URL: {e}")))?;
+
+        let (challenge, verifier) = pkce::generate_pkce();
+
+        let client = self
+            .apply_optional_client_secret(oauth2::basic::BasicClient::new(ClientId::new(
+                self.config.client_id.clone(),
+            )))
+            .set_auth_uri(auth_url)
+            .set_token_uri(token_url)
+            .set_redirect_uri(redirect_url);
+
+        let csrf_factory = || match state.clone() {
+            Some(value) => CsrfToken::new(value),
+            None => CsrfToken::new_random(),
+        };
+
+        let mut auth_request = client
+            .authorize_url(csrf_factory)
+            .set_pkce_challenge(challenge)
+            .add_extra_param("access_type", "offline")
+            .add_extra_param("prompt", "consent");
+
+        for scope in &self.config.scopes {
+            auth_request = auth_request.add_scope(Scope::new(scope.clone()));
+        }
+
+        let (auth_url, csrf_token) = auth_request.url();
+        let auth_url_str = {
+            let s = auth_url.to_string();
+            if let Some(pos) = s.find("scope=") {
+                let after_scope = &s[pos + 6..];
+                let (scope_value, rest) = match after_scope.find('&') {
+                    Some(amp) => (&after_scope[..amp], &after_scope[amp..]),
+                    None => (after_scope, ""),
+                };
+                format!("{}scope={}{}", &s[..pos], scope_value.replace('+', "%20"), rest)
+            } else {
+                s
+            }
+        };
+        Ok((auth_url_str, PkceState { verifier, csrf_token }))
+    }
+
+    /// Complete the OAuth flow with an explicit redirect URI (for server-side callback).
+    pub async fn complete_auth_with_redirect(
+        &self,
+        code: &str,
+        pkce_state: PkceState,
+        redirect_uri: &str,
+    ) -> Result<TokenPair, OAuthError> {
+        let auth_url = AuthUrl::new(self.config.auth_url.clone())
+            .map_err(|e| OAuthError::Config(format!("Invalid auth URL: {e}")))?;
+        let token_url = TokenUrl::new(self.config.token_url.clone())
+            .map_err(|e| OAuthError::Config(format!("Invalid token URL: {e}")))?;
+        let redirect_url = RedirectUrl::new(redirect_uri.to_string())
+            .map_err(|e| OAuthError::Config(format!("Invalid redirect URL: {e}")))?;
+
+        let client = self
+            .apply_optional_client_secret(oauth2::basic::BasicClient::new(ClientId::new(
+                self.config.client_id.clone(),
+            )))
+            .set_auth_uri(auth_url)
+            .set_token_uri(token_url)
+            .set_redirect_uri(redirect_url);
+
+        let http_client = build_http_client(&self.network)?;
+
+        let token_result = client
+            .exchange_code(AuthorizationCode::new(code.to_string()))
+            .set_pkce_verifier(pkce_state.verifier)
+            .request_async(&http_client)
+            .await
+            .map_err(|e| OAuthError::TokenExchange(format!("{e}")))?;
+
+        Ok(token_response_to_pair(&token_result, None))
+    }
 }
 
 pub fn build_http_client(network: &OAuthNetworkConfig) -> Result<reqwest::Client, OAuthError> {

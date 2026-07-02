@@ -301,6 +301,167 @@ fn is_remote_resource_url(url: &str) -> bool {
     trimmed.starts_with("http://") || trimmed.starts_with("https://") || trimmed.starts_with("//")
 }
 
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+fn render_text_segment(segment: &str, out: &mut String) {
+    let mut remaining = segment;
+    while !remaining.is_empty() {
+        if let Some(angle_pos) = remaining.find('<') {
+            let after_angle = &remaining[angle_pos + 1..];
+            if after_angle.starts_with("http://") || after_angle.starts_with("https://") {
+                if let Some(close) = after_angle.find('>') {
+                    let url = &after_angle[..close];
+                    out.push_str(&escape_html(&remaining[..angle_pos]));
+                    out.push_str(r#"<a href=""#);
+                    out.push_str(url);
+                    out.push_str(r#"" target="_blank" rel="noopener noreferrer">"#);
+                    out.push_str(&escape_html(url));
+                    out.push_str("</a>");
+                    remaining = &after_angle[close + 1..];
+                    continue;
+                }
+            }
+            out.push_str(&escape_html(&remaining[..angle_pos + 1]));
+            remaining = &remaining[angle_pos + 1..];
+        } else if let Some(pos) = remaining.find("http://").or_else(|| remaining.find("https://")) {
+            let url_part = &remaining[pos..];
+            let url_end = url_part
+                .find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\'' | ')' | ']'))
+                .unwrap_or(url_part.len());
+            let url = &url_part[..url_end];
+            out.push_str(&escape_html(&remaining[..pos]));
+            out.push_str(r#"<a href=""#);
+            out.push_str(url);
+            out.push_str(r#"" target="_blank" rel="noopener noreferrer">"#);
+            out.push_str(&escape_html(url));
+            out.push_str("</a>");
+            remaining = &url_part[url_end..];
+        } else {
+            out.push_str(&escape_html(remaining));
+            break;
+        }
+    }
+}
+
+fn is_bare_url_line(s: &str) -> Option<&str> {
+    let t = s.trim();
+    if t.is_empty() {
+        return None;
+    }
+    if !t.contains(' ') {
+        if t.starts_with("http://") || t.starts_with("https://") {
+            return Some(t);
+        }
+        if t.starts_with('<') && t.ends_with('>') {
+            let inner = &t[1..t.len() - 1];
+            if inner.starts_with("http://") || inner.starts_with("https://") {
+                return Some(inner);
+            }
+        }
+    }
+    if t.starts_with('<') {
+        if let Some(close) = t.find('>') {
+            let inner = &t[1..close];
+            if (inner.starts_with("http://") || inner.starts_with("https://"))
+                && !inner.contains(' ')
+            {
+                let after = t[close + 1..].trim();
+                if after.is_empty() || (after.chars().count() <= 2 && after.chars().all(|c| c.is_ascii_punctuation() || matches!(c, '。' | '，' | '！' | '？' | '、' | '…'))) {
+                    return Some(inner);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn text_to_html(text: &str) -> String {
+    let raw_lines: Vec<&str> = text.split('\n').collect();
+
+    let mut paragraphs: Vec<String> = Vec::new();
+    let mut current_para = String::new();
+    let mut i = 0;
+
+    while i < raw_lines.len() {
+        let raw = raw_lines[i];
+        let is_soft_break = raw.ends_with("  ") || raw.ends_with(' ');
+        let trimmed = raw.trim();
+
+        if trimmed.is_empty() {
+            if !current_para.is_empty() {
+                paragraphs.push(current_para.clone());
+                current_para.clear();
+            }
+            paragraphs.push(String::new());
+        } else if is_soft_break && !trimmed.is_empty() {
+            if !current_para.is_empty() {
+                current_para.push(' ');
+            }
+            current_para.push_str(trimmed);
+        } else {
+            if !current_para.is_empty() {
+                current_para.push(' ');
+            }
+            current_para.push_str(trimmed);
+            paragraphs.push(current_para.clone());
+            current_para.clear();
+        }
+        i += 1;
+    }
+    if !current_para.is_empty() {
+        paragraphs.push(current_para);
+    }
+
+    let mut result = String::with_capacity(text.len() + 512);
+    result.push_str(r#"<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:14px;line-height:1.6;word-break:break-word">"#);
+
+    let mut j = 0;
+    while j < paragraphs.len() {
+        let para = paragraphs[j].as_str();
+
+        if para.is_empty() {
+            result.push_str("<br>\n");
+            j += 1;
+            continue;
+        }
+
+        if let Some(url) = is_bare_url_line(para) {
+            result.push_str(r#"<p style="margin:0 0 4px"><a href=""#);
+            result.push_str(url);
+            result.push_str(r#"" target="_blank" rel="noopener noreferrer">"#);
+            result.push_str(&escape_html(url));
+            result.push_str("</a></p>\n");
+            j += 1;
+            continue;
+        }
+
+        if j + 1 < paragraphs.len() {
+            if let Some(url) = is_bare_url_line(paragraphs[j + 1].as_str()) {
+                result.push_str(r#"<p style="margin:0 0 4px"><a href=""#);
+                result.push_str(url);
+                result.push_str(r#"" target="_blank" rel="noopener noreferrer">"#);
+                render_text_segment(para, &mut result);
+                result.push_str("</a></p>\n");
+                j += 2;
+                continue;
+            }
+        }
+
+        result.push_str(r#"<p style="margin:0 0 4px">"#);
+        render_text_segment(para, &mut result);
+        result.push_str("</p>\n");
+        j += 1;
+    }
+
+    result.push_str("</div>");
+    result
+}
+
 fn render_email_html_for_privacy(
     html: &str,
     mode: PrivacyMode,
@@ -501,8 +662,13 @@ pub async fn get_message_with_html(
                     privacy_mode = PrivacyMode::LoadOnce;
                 }
             }
+            let effective_html = if html_raw.trim().is_empty() {
+                text_to_html(&msg.body_text)
+            } else {
+                html_raw
+            };
             let rendered =
-                render_email_html_for_privacy(&html_raw, privacy_mode, Some(&msg.from_address))
+                render_email_html_for_privacy(&effective_html, privacy_mode, Some(&msg.from_address))
                     .map_err(|e| ApiError::Internal(format!("Failed to render html: {e}")))?;
             let msg_json = serde_json::to_value(msg)
                 .map_err(|e| ApiError::Internal(format!("Failed to serialize message: {e}")))?;
@@ -527,13 +693,14 @@ pub async fn render_html(
 
     let result = store
         .with_read_async(move |conn| {
-            let sql = "SELECT account_id, from_address, body_html_raw FROM messages WHERE id = ?1";
+            let sql = "SELECT account_id, from_address, body_html_raw, body_text FROM messages WHERE id = ?1";
             let row_result = conn
                 .query_row(sql, rusqlite::params![message_id], |row| {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
                     ))
                 })
                 .optional();
@@ -547,7 +714,7 @@ pub async fn render_html(
         .map_err(|e| ApiError::Internal(format!("Failed to render html: {e}")))?;
 
     match result {
-        Some((account_id, from_address, html)) => {
+        Some((account_id, from_address, html_raw, body_text)) => {
             let mut privacy_mode = body.privacy_mode.unwrap_or(PrivacyMode::Strict);
             if matches!(privacy_mode, PrivacyMode::Strict) {
                 if let Ok(Some(_trust)) = state.store.is_trusted_sender(&account_id, &from_address)
@@ -555,7 +722,12 @@ pub async fn render_html(
                     privacy_mode = PrivacyMode::LoadOnce;
                 }
             }
-            let rendered = render_email_html_for_privacy(&html, privacy_mode, Some(&from_address))
+            let effective_html = if html_raw.trim().is_empty() {
+                text_to_html(&body_text)
+            } else {
+                html_raw
+            };
+            let rendered = render_email_html_for_privacy(&effective_html, privacy_mode, Some(&from_address))
                 .map_err(|e| ApiError::Internal(format!("Failed to render html: {e}")))?;
             Ok(Json(json!({
                 "html": rendered.html,

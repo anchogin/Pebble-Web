@@ -36,7 +36,7 @@ export default function InboxView() {
     () => activeAccountId ? [activeAccountId] : accounts.map((account) => account.id),
     [accounts, activeAccountId],
   );
-  const { data: folders = [] } = useFoldersForAccountsQuery(folderAccountIds);
+  const { data: folders = [], isFetched: foldersFetched } = useFoldersForAccountsQuery(folderAccountIds);
   const queryClient = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
   const [showTrashConfirm, setShowTrashConfirm] = useState(false);
@@ -74,8 +74,8 @@ export default function InboxView() {
 
   const detailOpen = threadView ? selectedThreadId !== null : selectedMessageId !== null;
 
-  // No accounts or no folder selected — show welcome / setup prompt
-  if (accounts.length === 0 || !activeFolderId) {
+  // No accounts — show welcome / setup prompt
+  if (accounts.length === 0) {
     return (
       <div className="fade-in" style={{
         display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
@@ -97,6 +97,34 @@ export default function InboxView() {
           }}
         >
           {t("settings.addAccount", "Add Account")}
+        </button>
+      </div>
+    );
+  }
+
+  // Has accounts but no folder yet (e.g. Gmail not synced) — show syncing hint
+  if (!activeFolderId && foldersFetched && folders.length === 0) {
+    return (
+      <div className="fade-in" style={{
+        display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+        height: "100%", gap: "16px", color: "var(--color-text-secondary)",
+      }}>
+        <Mail size={48} strokeWidth={1.2} />
+        <p style={{ fontSize: "16px", fontWeight: 500, color: "var(--color-text-primary)", margin: 0 }}>
+          {t("inbox.syncingTitle", "Syncing your mailbox…")}
+        </p>
+        <p style={{ fontSize: "13px", margin: 0 }}>
+          {t("inbox.syncingHint", "Please click \"Sync\" in Settings → Accounts to start syncing your email.")}
+        </p>
+        <button
+          onClick={() => setActiveView("settings")}
+          style={{
+            marginTop: "8px", padding: "8px 20px", borderRadius: "6px",
+            border: "none", backgroundColor: "var(--color-accent)", color: "#fff",
+            fontSize: "13px", fontWeight: 600, cursor: "pointer",
+          }}
+        >
+          {t("sidebar.settings", "Settings")}
         </button>
       </div>
     );

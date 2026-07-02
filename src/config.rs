@@ -7,6 +7,10 @@ pub struct Config {
     pub password_hash: String,
     pub jwt_secret: String,
     pub sync_interval_secs: u64,
+    pub log_retain_days: u32,
+    pub google_client_id: Option<String>,
+    pub google_client_secret: Option<String>,
+    pub public_url: Option<String>,
 }
 
 impl Config {
@@ -38,6 +42,11 @@ impl Config {
             .parse::<u64>()
             .map_err(|e| format!("Invalid PEBBLE_SYNC_INTERVAL: {e}"))?;
 
+        let log_retain_days = std::env::var("PEBBLE_LOG_RETAIN_DAYS")
+            .unwrap_or_else(|_| "7".to_string())
+            .parse::<u32>()
+            .map_err(|e| format!("Invalid PEBBLE_LOG_RETAIN_DAYS: {e}"))?;
+
         let password_hash = crate::auth::hash_password(&password)
             .map_err(|e| format!("Failed to hash password: {e}"))?;
 
@@ -47,6 +56,10 @@ impl Config {
             password_hash,
             jwt_secret,
             sync_interval_secs,
+            log_retain_days,
+            google_client_id: std::env::var("GOOGLE_CLIENT_ID").ok(),
+            google_client_secret: std::env::var("GOOGLE_CLIENT_SECRET").ok(),
+            public_url: std::env::var("PEBBLE_PUBLIC_URL").ok(),
         })
     }
 
@@ -64,6 +77,10 @@ impl Config {
 
     pub fn key_file_path(&self) -> PathBuf {
         self.data_dir.join("encryption.key")
+    }
+
+    pub fn log_dir(&self) -> PathBuf {
+        self.data_dir.join("logs")
     }
 }
 

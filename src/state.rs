@@ -3,11 +3,25 @@ use crate::sync::SyncManager;
 use pebble_crypto::CryptoService;
 use pebble_search::TantivySearch;
 use pebble_store::Store;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Mutex};
 
 pub type AppStateRef = Arc<AppState>;
+
+#[derive(Debug, Clone)]
+pub enum OAuthSessionResult {
+    Pending,
+    Complete { account_id: String, email: String },
+    Error(String),
+}
+
+pub struct OAuthSession {
+    pub pkce_state: Option<pebble_oauth::PkceState>,
+    pub display_name: String,
+    pub result: OAuthSessionResult,
+}
 
 pub struct AppState {
     pub config: Config,
@@ -17,6 +31,7 @@ pub struct AppState {
     pub attachments_dir: PathBuf,
     pub sync_manager: Arc<SyncManager>,
     pub ws_broadcast: broadcast::Sender<String>,
+    pub oauth_sessions: Arc<Mutex<HashMap<String, OAuthSession>>>,
 }
 
 impl AppState {
@@ -59,6 +74,7 @@ impl AppState {
             attachments_dir,
             sync_manager,
             ws_broadcast,
+            oauth_sessions: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Inbox,
   Send,
@@ -12,6 +12,8 @@ import {
   Search,
   Clock,
   Star,
+  ChevronRight,
+  ChevronDown,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useUIStore } from "../stores/ui.store";
@@ -23,8 +25,10 @@ import { useFolderUnreadCountsForAccounts } from "../hooks/queries/useFolderUnre
 import {
   ALL_ACCOUNTS_SELECT_VALUE,
   buildAllAccountsFolders,
+  buildFolderTree,
   sortFoldersForSidebar,
   unreadCountForFolder,
+  type FolderTreeNode,
 } from "../lib/folderAggregation";
 import type { Account, Folder as FolderType } from "../lib/api";
 
@@ -95,6 +99,27 @@ export default function Sidebar() {
     return sortFoldersForSidebar(displayedFolders);
   }, [displayedFolders]);
 
+  const systemFolders = useMemo(
+    () => dedupedFolders.filter((f) => f.role),
+    [dedupedFolders],
+  );
+
+  const customFolderTree = useMemo(
+    () => buildFolderTree(dedupedFolders.filter((f) => !f.role)),
+    [dedupedFolders],
+  );
+
+  const [collapsedPaths, setCollapsedPaths] = useState<Set<string>>(new Set());
+
+  const toggleCollapsed = (path: string) => {
+    setCollapsedPaths((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
   // Auto-select the only account. With multiple accounts, null means the
   // combined "all accounts" mailbox.
   useEffect(() => {
@@ -110,10 +135,13 @@ export default function Sidebar() {
       const inbox = displayedFolders.find((f) => f.role === "inbox");
       setActiveFolderId((inbox ?? displayedFolders[0]).id);
     } else if (!allAccountsMode && foldersFetched && displayedFolders.length === 0 && activeAccountId && accounts.length > 1) {
-      const idx = accounts.findIndex((a) => a.id === activeAccountId);
-      const next = accounts[idx + 1] ?? accounts.find((a) => a.id !== activeAccountId);
-      if (next) {
-        setActiveAccountId(next.id);
+      const activeAccount = accounts.find((a) => a.id === activeAccountId);
+      if (activeAccount && activeAccount.provider !== "gmail") {
+        const idx = accounts.findIndex((a) => a.id === activeAccountId);
+        const next = accounts[idx + 1] ?? accounts.find((a) => a.id !== activeAccountId);
+        if (next) {
+          setActiveAccountId(next.id);
+        }
       }
     }
   }, [displayedFolders, foldersFetched, activeFolderId, setActiveFolderId, accounts, activeAccountId, setActiveAccountId, allAccountsMode]);
@@ -213,39 +241,6 @@ export default function Sidebar() {
         </div>
       )}
 
-      {/* Account switcher */}
-      {!sidebarCollapsed && accounts.length > 1 && (
-        <div style={{ padding: "0 10px 8px" }}>
-          <select
-            aria-label={t("settings.emailAccounts", "Email Accounts")}
-            value={activeAccountId || ALL_ACCOUNTS_SELECT_VALUE}
-            onChange={(e) => {
-              setActiveAccountId(e.target.value === ALL_ACCOUNTS_SELECT_VALUE ? null : e.target.value);
-              setActiveFolderId(null);
-            }}
-            style={{
-              width: "100%",
-              padding: "6px 10px",
-              fontSize: "13px",
-              borderRadius: "8px",
-              border: "1.5px solid color-mix(in srgb, var(--color-accent) 50%, var(--color-border))",
-              backgroundColor: "color-mix(in srgb, var(--color-accent) 6%, transparent)",
-              color: "var(--color-text-primary)",
-              cursor: "pointer",
-            }}
-          >
-            <option value={ALL_ACCOUNTS_SELECT_VALUE}>
-              {t("sidebar.allAccounts", "All accounts")}
-            </option>
-            {accounts.map((acc) => (
-              <option key={acc.id} value={acc.id}>
-                {acc.email}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
-
       {/* Folders section */}
       <nav
         className="scroll-region sidebar-folder-scroll"
@@ -260,36 +255,56 @@ export default function Sidebar() {
         }}
       >
         {hasRealFolders
-          ? dedupedFolders.flatMap((folder) => {
-              const items: React.ReactNode[] = [];
-              if (folder.role === "drafts") {
+          ? [
+              ...systemFolders.flatMap((folder) => {
+                const items: React.ReactNode[] = [];
+                if (folder.role === "drafts") {
+                  items.push(
+                    <SidebarButton
+                      key="__starred__"
+                      icon={<Star size={16} />}
+                      label={t("sidebar.starred", "Starred")}
+                      isActive={activeView === "starred"}
+                      collapsed={sidebarCollapsed}
+                      style={buttonBase}
+                      onClick={() => void safeSetActiveView("starred")}
+                    />
+                  );
+                }
+                const isActive = folder.id === activeFolderId && activeView === "inbox";
                 items.push(
                   <SidebarButton
-                    key="__starred__"
-                    icon={<Star size={16} />}
-                    label={t("sidebar.starred", "Starred")}
-                    isActive={activeView === "starred"}
+                    key={folder.id}
+                    icon={folderIcon(folder.role)}
+                    label={folderLabel(folder)}
+                    badge={showUnread ? unreadCountForFolder(folder.id, folders, unreadCounts) : undefined}
+                    isActive={isActive}
                     collapsed={sidebarCollapsed}
                     style={buttonBase}
-                    onClick={() => void safeSetActiveView("starred")}
+                    onClick={() => void handleFolderClick(folder.id)}
                   />
                 );
-              }
-              const isActive = folder.id === activeFolderId && activeView === "inbox";
-              items.push(
-                <SidebarButton
-                  key={folder.id}
-                  icon={folderIcon(folder.role)}
-                  label={folderLabel(folder)}
-                  badge={showUnread ? unreadCountForFolder(folder.id, folders, unreadCounts) : undefined}
-                  isActive={isActive}
+                return items;
+              }),
+              ...customFolderTree.map((node) => (
+                <FolderTreeItem
+                  key={node.folder?.id ?? `virt:${node.label}`}
+                  node={node}
+                  depth={0}
+                  path={node.label}
+                  activeFolderId={activeFolderId}
+                  activeView={activeView}
                   collapsed={sidebarCollapsed}
-                  style={buttonBase}
-                  onClick={() => void handleFolderClick(folder.id)}
+                  collapsedPaths={collapsedPaths}
+                  onToggleCollapse={toggleCollapsed}
+                  buttonBase={buttonBase}
+                  showUnread={showUnread}
+                  folders={folders}
+                  unreadCounts={unreadCounts}
+                  onFolderClick={(id) => void handleFolderClick(id)}
                 />
-              );
-              return items;
-            })
+              )),
+            ]
           : DEFAULT_FOLDERS.flatMap((df, index) => {
               const items: React.ReactNode[] = [];
               if (df.role === "drafts") {
@@ -319,6 +334,74 @@ export default function Sidebar() {
               return items;
             })}
       </nav>
+
+      {/* Account switcher — above divider */}
+      {accounts.length > 1 && (
+        <div style={{ padding: sidebarCollapsed ? "6px" : "6px 8px" }}>
+          {sidebarCollapsed ? (
+            <button
+              type="button"
+              title={activeAccountId
+                ? (accounts.find((a) => a.id === activeAccountId)?.email ?? "")
+                : t("sidebar.allAccounts", "All accounts")}
+              onClick={() => {
+                const idx = activeAccountId
+                  ? accounts.findIndex((a) => a.id === activeAccountId)
+                  : -1;
+                const next = accounts[(idx + 1) % (accounts.length + 1)];
+                setActiveAccountId(next ? next.id : null);
+                setActiveFolderId(null);
+              }}
+              style={{
+                width: "100%",
+                height: "32px",
+                borderRadius: "6px",
+                border: "1.5px solid var(--color-border)",
+                backgroundColor: "var(--color-bg)",
+                color: "var(--color-accent)",
+                fontSize: "11px",
+                fontWeight: 700,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              {activeAccountId
+                ? (accounts.find((a) => a.id === activeAccountId)?.email?.[0] ?? "?").toUpperCase()
+                : "✦"}
+            </button>
+          ) : (
+            <select
+              aria-label={t("settings.emailAccounts", "Email Accounts")}
+              value={activeAccountId ?? ALL_ACCOUNTS_SELECT_VALUE}
+              onChange={(e) => {
+                setActiveAccountId(e.target.value === ALL_ACCOUNTS_SELECT_VALUE ? null : e.target.value);
+                setActiveFolderId(null);
+              }}
+              style={{
+                width: "100%",
+                padding: "6px 8px",
+                fontSize: "12px",
+                borderRadius: "6px",
+                border: "1.5px solid var(--color-border)",
+                backgroundColor: "var(--color-bg)",
+                color: "var(--color-text-primary)",
+                cursor: "pointer",
+              }}
+            >
+              <option value={ALL_ACCOUNTS_SELECT_VALUE}>
+                {t("sidebar.allAccounts", "All accounts")}
+              </option>
+              {accounts.map((acc) => (
+                <option key={acc.id} value={acc.id}>
+                  {acc.email}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+      )}
 
       {/* Divider */}
       <div
@@ -365,6 +448,121 @@ export default function Sidebar() {
         />
       </nav>
     </aside>
+  );
+}
+
+function FolderTreeItem({
+  node,
+  depth,
+  path,
+  activeFolderId,
+  activeView,
+  collapsed,
+  collapsedPaths,
+  onToggleCollapse,
+  buttonBase,
+  showUnread,
+  folders,
+  unreadCounts,
+  onFolderClick,
+}: {
+  node: FolderTreeNode;
+  depth: number;
+  path: string;
+  activeFolderId: string | null;
+  activeView: string;
+  collapsed: boolean;
+  collapsedPaths: Set<string>;
+  onToggleCollapse: (path: string) => void;
+  buttonBase: React.CSSProperties;
+  showUnread: boolean;
+  folders: FolderType[];
+  unreadCounts: Record<string, number>;
+  onFolderClick: (id: string) => void;
+}) {
+  const hasChildren = node.children.length > 0;
+  const isCollapsed = collapsedPaths.has(path);
+  const isActive = !!node.folder && node.folder.id === activeFolderId && activeView === "inbox";
+  const indent = depth * 12;
+
+  const handleClick = () => {
+    if (node.folder) {
+      onFolderClick(node.folder.id);
+    } else {
+      onToggleCollapse(path);
+    }
+  };
+
+  return (
+    <>
+      <button
+        type="button"
+        aria-label={collapsed ? node.label : undefined}
+        aria-current={isActive ? "page" : undefined}
+        title={collapsed ? node.label : undefined}
+        onClick={hasChildren && node.folder ? undefined : handleClick}
+        style={{
+          ...buttonBase,
+          paddingLeft: collapsed ? undefined : `${10 + indent}px`,
+          backgroundColor: isActive ? "var(--color-sidebar-active)" : "transparent",
+          color: "var(--color-text-primary)",
+          cursor: "pointer",
+          transition: "background-color 0.15s ease",
+          position: "relative",
+        }}
+        onMouseEnter={(e) => {
+          if (!isActive) e.currentTarget.style.backgroundColor = "var(--color-sidebar-hover)";
+        }}
+        onMouseLeave={(e) => {
+          if (!isActive) e.currentTarget.style.backgroundColor = "transparent";
+        }}
+      >
+        {hasChildren && !collapsed && (
+          <span
+            onClick={(e) => { e.stopPropagation(); onToggleCollapse(path); }}
+            style={{ display: "flex", alignItems: "center", flexShrink: 0, opacity: 0.5 }}
+          >
+            {isCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+          </span>
+        )}
+        {!(hasChildren && !collapsed) && (
+          <Folder size={16} style={{ flexShrink: 0 }} />
+        )}
+        {!collapsed && (
+          <>
+            <span
+              style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}
+              onClick={node.folder ? () => onFolderClick(node.folder!.id) : () => onToggleCollapse(path)}
+            >
+              {node.label}
+            </span>
+            {showUnread && node.folder && unreadCountForFolder(node.folder.id, folders, unreadCounts) > 0 && (
+              <span style={{ fontSize: "11px", fontWeight: 600, color: "var(--color-accent)", minWidth: "18px", textAlign: "right" }}>
+                {unreadCountForFolder(node.folder.id, folders, unreadCounts)}
+              </span>
+            )}
+          </>
+        )}
+      </button>
+      {hasChildren && !isCollapsed && node.children.map((child) => (
+        <FolderTreeItem
+          key={child.folder?.id ?? `virt:${path}/${child.label}`}
+          node={child}
+          depth={depth + 1}
+          path={`${path}/${child.label}`}
+          activeFolderId={activeFolderId}
+          activeView={activeView}
+          collapsed={collapsed}
+          collapsedPaths={collapsedPaths}
+          onToggleCollapse={onToggleCollapse}
+          buttonBase={buttonBase}
+          showUnread={showUnread}
+          folders={folders}
+          unreadCounts={unreadCounts}
+          onFolderClick={onFolderClick}
+        />
+      ))}
+    </>
   );
 }
 

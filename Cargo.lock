@@ -381,6 +381,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "charset"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1f927b07c74ba84c7e5fe4db2baeb3e996ab2688992e39ac68ce3220a677c7e"
+dependencies = [
+ "base64 0.22.1",
+ "encoding_rs",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -614,6 +624,12 @@ dependencies = [
  "quote",
  "syn 2.0.117",
 ]
+
+[[package]]
+name = "dotenv"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77c90badedccf4105eca100756a0b1289e191f6fcbdadd3cee1d2f614f97da8f"
 
 [[package]]
 name = "downcast-rs"
@@ -1422,7 +1438,7 @@ dependencies = [
  "mime",
  "nom 8.0.0",
  "percent-encoding",
- "quoted_printable",
+ "quoted_printable 0.5.2",
  "rustls",
  "socket2",
  "tokio",
@@ -1540,6 +1556,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93c3b9e5d8b17faf573330bbc43b37d6e918c0a3bf8a88e7d0a220ebc84af9fc"
 dependencies = [
  "encoding_rs",
+]
+
+[[package]]
+name = "mailparse"
+version = "0.13.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8cae768a50835557749599277fc59f7c728118724eb34185e8feb633ef266a32"
+dependencies = [
+ "charset",
+ "data-encoding",
+ "quoted_printable 0.4.8",
 ]
 
 [[package]]
@@ -1834,9 +1861,12 @@ version = "0.1.0"
 dependencies = [
  "async-imap",
  "async-trait",
+ "base64 0.22.1",
+ "chrono",
  "futures",
  "lettre",
  "mail-parser",
+ "mailparse",
  "pebble-core",
  "pebble-store",
  "rand 0.8.6",
@@ -1914,15 +1944,18 @@ dependencies = [
  "argon2",
  "axum",
  "base64 0.22.1",
+ "dotenv",
  "hex",
  "jsonwebtoken",
  "lol_html",
  "pebble-core",
  "pebble-crypto",
  "pebble-mail",
+ "pebble-oauth",
  "pebble-search",
  "pebble-store",
  "pebble-translate",
+ "reqwest",
  "rusqlite",
  "serde",
  "serde_json",
@@ -1931,6 +1964,7 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "tracing-appender",
  "tracing-subscriber",
 ]
 
@@ -2172,6 +2206,12 @@ checksum = "41f2619966050689382d2b44f664f4bc593e129785a36d6ee376ddf37259b924"
 dependencies = [
  "proc-macro2",
 ]
+
+[[package]]
+name = "quoted_printable"
+version = "0.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a3866219251662ec3b26fc217e3e05bf9c4f84325234dfb96bf0bf840889e49"
 
 [[package]]
 name = "quoted_printable"
@@ -2854,6 +2894,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
+name = "symlink"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7973cce6668464ea31f176d85b13c7ab3bba2cb3b77a2ed26abd7801688010a"
+
+[[package]]
 name = "syn"
 version = "1.0.109"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3301,6 +3347,19 @@ dependencies = [
  "pin-project-lite",
  "tracing-attributes",
  "tracing-core",
+]
+
+[[package]]
+name = "tracing-appender"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "050686193eb999b4bb3bc2acfa891a13da00f79734704c4b8b4ef1a10b368a3c"
+dependencies = [
+ "crossbeam-channel",
+ "symlink",
+ "thiserror 2.0.18",
+ "time",
+ "tracing-subscriber",
 ]
 
 [[package]]

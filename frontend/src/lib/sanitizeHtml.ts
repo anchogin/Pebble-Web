@@ -116,6 +116,18 @@ function normalizeLinkAttributes(html: string): string {
   return template.innerHTML;
 }
 
+function sanitizeStyleTags(html: string): string {
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  template.content.querySelectorAll("style").forEach((el) => {
+    const css = el.textContent ?? "";
+    if (/(expression\s*\(|javascript:|vbscript:|@import\s+url)/i.test(css)) {
+      el.remove();
+    }
+  });
+  return template.innerHTML;
+}
+
 /** Sanitize HTML to prevent XSS while preserving email formatting. */
 export function sanitizeHtml(html: string): string {
   const sanitized = DOMPurify.sanitize(html, {
@@ -128,6 +140,7 @@ export function sanitizeHtml(html: string): string {
       "q", "rp", "rt", "ruby", "s", "samp", "section", "small", "span",
       "strong", "sub", "summary", "sup", "table", "tbody", "td", "tfoot",
       "th", "thead", "time", "tr", "u", "ul", "var", "wbr",
+      "style",
     ],
     ALLOWED_ATTR: [
       "href", "src", "alt", "title", "width", "height", "class",
@@ -135,8 +148,10 @@ export function sanitizeHtml(html: string): string {
       "dir", "id", "lang", "colspan", "rowspan", "border", "cellpadding",
       "cellspacing", "align", "valign", "bgcolor", "color", "face", "size",
       "style",
+      "data-pebble-blocked-src",
     ],
     ALLOW_DATA_ATTR: false,
+    FORCE_BODY: true,
   });
-  return normalizeLinkAttributes(filterInlineStyles(sanitized));
+  return normalizeLinkAttributes(filterInlineStyles(sanitizeStyleTags(sanitized)));
 }

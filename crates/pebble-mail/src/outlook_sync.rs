@@ -240,6 +240,7 @@ impl OutlookSyncWorker {
                 message_tx: None,
                 runtime_status_tx: None,
                 progress_tx: None,
+                log_tx: None,
             },
             provider,
             token_refresher: None,

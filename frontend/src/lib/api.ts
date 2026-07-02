@@ -3,6 +3,7 @@ import api from "../api-client";
 // Re-export all IPC types so existing `import { Foo } from "@/lib/api"` keeps working.
 export type {
   Account,
+  AccountConfig,
   AccountProxyMode,
   AccountProxySetting,
   AddAccountRequest,
@@ -29,6 +30,8 @@ export type {
   Rule,
   SearchHit,
   SnoozedMessage,
+  SyncConfig,
+  SyncProgress,
   ThreadSummary,
   TranslateConfig,
   TranslateResult,
@@ -37,6 +40,7 @@ export type {
 
 import type {
   Account,
+  AccountConfig,
   AccountProxyMode,
   AccountProxySetting,
   AddAccountRequest,
@@ -61,6 +65,7 @@ import type {
   Rule,
   SearchHit,
   SnoozedMessage,
+  SyncConfig,
   ThreadSummary,
   TranslateConfig,
   TranslateResult,
@@ -71,6 +76,21 @@ import type {
 
 export async function healthCheck(): Promise<string> {
   const res = await api.get<string>("/health");
+  return res.data;
+}
+
+export async function startGoogleOAuth(): Promise<{ sessionId: string; authUrl: string }> {
+  const res = await api.get<{ session_id: string; auth_url: string }>("/oauth/google/start");
+  return { sessionId: res.data.session_id, authUrl: res.data.auth_url };
+}
+
+export type OAuthStatus =
+  | { status: "pending" }
+  | { status: "complete"; account_id: string; email: string }
+  | { status: "error"; message: string };
+
+export async function pollGoogleOAuth(sessionId: string): Promise<OAuthStatus> {
+  const res = await api.get(`/oauth/google/status/${sessionId}`);
   return res.data;
 }
 
@@ -160,9 +180,27 @@ export async function addAccount(request: AddAccountRequest): Promise<Account> {
   return res.data;
 }
 
-export async function testAccountConnection(accountId: string): Promise<string> {
-  const res = await api.post<{ ok: boolean; report: string }>(`/accounts/${accountId}/test-connection`);
-  return res.data.report;
+export async function getAccountConfig(accountId: string): Promise<AccountConfig> {
+  const res = await api.get<AccountConfig>(`/accounts/${accountId}`);
+  return res.data;
+}
+
+export async function updateSyncConfig(
+  accountId: string,
+  config: SyncConfig,
+): Promise<{ message?: string }> {
+  const res = await api.put<{ message?: string }>(
+    `/accounts/${accountId}/sync-config`,
+    config,
+  );
+  return res.data;
+}
+
+export async function testAccountConnection(
+  accountId: string,
+): Promise<{ success: boolean; message: string }> {
+  const res = await api.post(`/accounts/${accountId}/test-connection`);
+  return res.data;
 }
 
 export async function testImapConnection(
@@ -393,6 +431,10 @@ export async function startSync(accountId: string, _pollIntervalSecs?: number): 
 
 export async function triggerSync(accountId: string, reason: string): Promise<void> {
   await api.post("/sync/trigger", { accountId, reason });
+}
+
+export async function cancelSync(accountId: string): Promise<void> {
+  await api.post(`/accounts/${accountId}/cancel-sync`);
 }
 
 export type RealtimePreference = "realtime" | "balanced" | "battery" | "manual";

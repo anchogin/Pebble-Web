@@ -23,6 +23,18 @@ pub struct SyncState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_sync_cursor: Option<String>,
 
+    /// Sync strategy for initial/manual sync.
+    /// - `None` or `Some("recent")`: sync recent messages only (default 200)
+    /// - `Some("all")`: sync all messages from the beginning
+    /// - `Some("since_date")`: sync messages since sync_since_date
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_strategy: Option<String>,
+
+    /// Date threshold for "since_date" strategy (format: "YYYY-MM-DD").
+    /// Messages with date >= this value will be synced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_since_date: Option<String>,
+
     /// Legacy inline IMAP config, present on accounts that predate the move
     /// of credentials into `auth_data`. New accounts should not populate it.
     #[serde(default, skip_serializing_if = "Option::is_none")]

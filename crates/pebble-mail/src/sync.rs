@@ -16,12 +16,79 @@ pub struct SyncError {
     pub timestamp: u64,
 }
 
+/// A single log entry for sync operations.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct SyncLogEntry {
+    pub timestamp: u64,
+    pub level: String,  // info, warn, error
+    pub account_id: String,
+    pub server: String,
+    pub action: String,  // connect, list_folders, fetch_messages, etc.
+    pub request: Option<String>,
+    pub response: Option<String>,
+    pub error: Option<String>,
+    pub message_count: Option<u32>,
+}
+
+impl SyncLogEntry {
+    pub fn new(account_id: &str, server: &str, action: &str) -> Self {
+        Self {
+            timestamp: now_timestamp() as u64,
+            level: "info".to_string(),
+            account_id: account_id.to_string(),
+            server: server.to_string(),
+            action: action.to_string(),
+            request: None,
+            response: None,
+            error: None,
+            message_count: None,
+        }
+    }
+
+    pub fn with_request(mut self, req: String) -> Self {
+        self.request = Some(req);
+        self
+    }
+
+    pub fn with_response(mut self, resp: String) -> Self {
+        self.response = Some(resp);
+        self
+    }
+
+    pub fn with_error(mut self, err: String) -> Self {
+        self.level = "error".to_string();
+        self.error = Some(err);
+        self
+    }
+
+    pub fn with_message_count(mut self, count: u32) -> Self {
+        self.message_count = Some(count);
+        self
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SyncProgress {
     pub account_id: String,
     pub status: String,
     pub phase: String,
     pub message: Option<String>,
+    /// Detailed progress information for long-running syncs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress: Option<SyncProgressDetail>,
+}
+
+/// Detailed progress tracking for sync operations.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SyncProgressDetail {
+    /// Number of messages synced so far.
+    pub current: u32,
+    /// Total number of messages to sync (if known).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<u32>,
+    /// Progress percentage (0.0 - 100.0), None if total is unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub percentage: Option<f32>,
 }
 
 impl SyncProgress {
@@ -31,6 +98,7 @@ impl SyncProgress {
             status: "started".to_string(),
             phase: phase.to_string(),
             message: None,
+            progress: None,
         }
     }
 
@@ -40,6 +108,7 @@ impl SyncProgress {
             status: "completed".to_string(),
             phase: phase.to_string(),
             message: None,
+            progress: None,
         }
     }
 
@@ -49,6 +118,7 @@ impl SyncProgress {
             status: "error".to_string(),
             phase: phase.to_string(),
             message: Some(message.to_string()),
+            progress: None,
         }
     }
 }
@@ -505,6 +575,7 @@ pub(crate) struct SyncWorkerBase {
     pub(crate) message_tx: Option<mpsc::UnboundedSender<StoredMessage>>,
     pub(crate) runtime_status_tx: Option<mpsc::UnboundedSender<SyncRuntimeStatus>>,
     pub(crate) progress_tx: Option<mpsc::UnboundedSender<SyncProgress>>,
+    pub(crate) log_tx: Option<mpsc::UnboundedSender<SyncLogEntry>>,
 }
 
 impl SyncWorkerBase {
@@ -549,6 +620,12 @@ impl SyncWorkerBase {
             let _ = tx.send(SyncProgress::error(&self.account_id, phase, message));
         }
     }
+
+    pub(crate) fn emit_log(&self, entry: SyncLogEntry) {
+        if let Some(tx) = &self.log_tx {
+            let _ = tx.send(entry);
+        }
+    }
 }
 
 /// A worker that syncs mail for one account.
@@ -557,6 +634,8 @@ pub struct SyncWorker {
     provider: Arc<ImapMailProvider>,
     idle_provider: Arc<ImapMailProvider>,
     stop_rx: watch::Receiver<bool>,
+    cancel_rx: watch::Receiver<bool>,
+    cancel_tx: watch::Sender<bool>,
 }
 
 impl SyncWorker {
@@ -569,6 +648,7 @@ impl SyncWorker {
         attachments_dir: impl Into<PathBuf>,
     ) -> Self {
         let idle_provider = Arc::new(provider.clone_for_idle());
+        let (cancel_tx, cancel_rx) = watch::channel(false);
         Self {
             base: SyncWorkerBase {
                 account_id: account_id.into(),
@@ -578,11 +658,34 @@ impl SyncWorker {
                 message_tx: None,
                 runtime_status_tx: None,
                 progress_tx: None,
+                log_tx: None,
             },
             provider,
             idle_provider,
             stop_rx,
+            cancel_rx,
+            cancel_tx,
         }
+    }
+
+    /// Request cancellation of the current sync operation.
+    pub fn request_cancel(&self) {
+        let _ = self.cancel_tx.send(true);
+    }
+
+    /// Get a clone of the cancel sender for external use.
+    pub fn cancel_sender(&self) -> watch::Sender<bool> {
+        self.cancel_tx.clone()
+    }
+
+    /// Check if cancellation has been requested.
+    fn is_cancelled(&self) -> bool {
+        *self.cancel_rx.borrow()
+    }
+
+    /// Reset the cancellation flag.
+    fn reset_cancel_flag(&self) {
+        let _ = self.cancel_tx.send(false);
     }
 
     /// Set the error channel for emitting structured sync errors.
@@ -604,6 +707,11 @@ impl SyncWorker {
 
     pub fn with_progress_tx(mut self, tx: mpsc::UnboundedSender<SyncProgress>) -> Self {
         self.base.progress_tx = Some(tx);
+        self
+    }
+
+    pub fn with_log_tx(mut self, tx: mpsc::UnboundedSender<SyncLogEntry>) -> Self {
+        self.base.log_tx = Some(tx);
         self
     }
 
@@ -784,11 +892,34 @@ impl SyncWorker {
     pub async fn initial_sync(&self) -> Result<()> {
         info!("Starting initial sync for account {}", self.base.account_id);
 
-        let remote_folders = self
+        let server = self.provider.inner().config().host.clone();
+        self.base.emit_log(
+            SyncLogEntry::new(&self.base.account_id, &server, "list_folders")
+                .with_request("LIST \"\" \"*\"".to_string()),
+        );
+
+        let remote_folders = match self
             .provider
             .inner()
             .list_folders(&self.base.account_id)
-            .await?;
+            .await
+        {
+            Ok(folders) => {
+                self.base.emit_log(
+                    SyncLogEntry::new(&self.base.account_id, &server, "list_folders")
+                        .with_response(format!("{} folders", folders.len()))
+                        .with_message_count(folders.len() as u32),
+                );
+                folders
+            }
+            Err(e) => {
+                self.base.emit_log(
+                    SyncLogEntry::new(&self.base.account_id, &server, "list_folders")
+                        .with_error(e.to_string()),
+                );
+                return Err(e);
+            }
+        };
 
         for folder in &remote_folders {
             // Upsert folder into store
@@ -877,7 +1008,27 @@ impl SyncWorker {
                     "IMAP connection failed during initial sync for folder {} account {}; reconnecting before retry: {}",
                     folder.name, self.base.account_id, e
                 );
+                let server = self.provider.inner().config().host.clone();
+                self.base.emit_log(
+                    SyncLogEntry::new(&self.base.account_id, &server, "reconnect")
+                        .with_request(format!("folder={} reason={}", folder.name, e))
+                        .with_response("reconnecting...".to_string()),
+                );
                 let _ = self.provider.disconnect().await;
+                match self.provider.connect().await {
+                    Ok(()) => {
+                        self.base.emit_log(
+                            SyncLogEntry::new(&self.base.account_id, &server, "reconnect")
+                                .with_response(format!("folder={} reconnected OK", folder.name)),
+                        );
+                    }
+                    Err(ref ce) => {
+                        self.base.emit_log(
+                            SyncLogEntry::new(&self.base.account_id, &server, "reconnect")
+                                .with_error(format!("folder={} {}", folder.name, ce)),
+                        );
+                    }
+                }
                 self.provider.connect().await?;
                 self.initial_sync_folder_once(folder).await
             }
@@ -894,6 +1045,35 @@ impl SyncWorker {
             return Ok(());
         }
 
+        let server = self.provider.inner().config().host.clone();
+
+        // Check sync strategy from account sync_state
+        let sync_state = self.base.store.get_sync_state(&self.base.account_id)?;
+        let sync_strategy = sync_state.as_ref().and_then(|s| s.sync_strategy.clone());
+        let sync_since_date = sync_state.as_ref().and_then(|s| s.sync_since_date.clone());
+
+        // If sync strategy is "all" or "since_date", use pagination
+        if sync_strategy.as_deref() == Some("all") || sync_strategy.as_deref() == Some("since_date") {
+            self.base.emit_log(
+                SyncLogEntry::new(&self.base.account_id, &server, "initial_sync_folder")
+                    .with_request(format!(
+                        "folder={} strategy={} since={:?}",
+                        folder.name,
+                        sync_strategy.as_deref().unwrap_or("all"),
+                        sync_since_date
+                    )),
+            );
+            // Reset cancel flag before starting
+            self.reset_cancel_flag();
+            return self.sync_folder_with_pagination(folder, sync_since_date.as_deref()).await;
+        }
+
+        // Default: recent messages only
+        self.base.emit_log(
+            SyncLogEntry::new(&self.base.account_id, &server, "initial_sync_folder")
+                .with_request(format!("folder={} strategy=recent", folder.name)),
+        );
+
         let cursor = self.try_imap_folder_cursor_for_sync(folder).await?;
         let since_uid = cursor.last_uid;
         let limit = if since_uid.is_some() { 50 } else { 200 };
@@ -907,6 +1087,17 @@ impl SyncWorker {
                 "Initial sync: fetched {} messages from {}",
                 count, folder.name
             );
+            self.base.emit_log(
+                SyncLogEntry::new(&self.base.account_id, &server, "initial_sync_folder")
+                    .with_response(format!("folder={} {} messages synced", folder.name, count))
+                    .with_message_count(count),
+            );
+        } else {
+            self.base.emit_log(
+                SyncLogEntry::new(&self.base.account_id, &server, "initial_sync_folder")
+                    .with_response(format!("folder={} up to date", folder.name))
+                    .with_message_count(0),
+            );
         }
         if let Err(e) = self.persist_imap_folder_cursor_after_sync(folder, cursor) {
             warn!("Failed to persist IMAP cursor for {}: {}", folder.name, e);
@@ -915,9 +1106,409 @@ impl SyncWorker {
         Ok(())
     }
 
+    /// Format a date string "YYYY-MM-DD" to IMAP date format "DD-Mon-YYYY"
+    /// Example: "2020-01-15" -> "15-Jan-2020"
+    fn format_imap_date(date_str: &str) -> Result<String> {
+        let parts: Vec<&str> = date_str.split('-').collect();
+        if parts.len() != 3 {
+            return Err(PebbleError::Storage(format!("Invalid date format: {}", date_str)));
+        }
+
+        let year = parts[0];
+        let month_num = parts[1].parse::<u32>().map_err(|e| {
+            PebbleError::Storage(format!("Invalid month in date {}: {}", date_str, e))
+        })?;
+        let day = parts[2];
+
+        let month_name = match month_num {
+            1 => "Jan", 2 => "Feb", 3 => "Mar", 4 => "Apr",
+            5 => "May", 6 => "Jun", 7 => "Jul", 8 => "Aug",
+            9 => "Sep", 10 => "Oct", 11 => "Nov", 12 => "Dec",
+            _ => return Err(PebbleError::Storage(format!("Invalid month number: {}", month_num))),
+        };
+
+        Ok(format!("{}-{}-{}", day, month_name, year))
+    }
+
     /// Check if a folder is local-only (not backed by IMAP).
     fn is_local_folder(folder: &pebble_core::Folder) -> bool {
         !should_attempt_imap_remote_folder(folder)
+    }
+
+    /// Sync a folder with pagination for large message sets.
+    /// Supports both full sync ("all") and date-filtered sync ("since_date").
+    async fn sync_folder_with_pagination(
+        &self,
+        folder: &pebble_core::Folder,
+        since_date: Option<&str>,
+    ) -> Result<()> {
+        if Self::is_local_folder(folder) {
+            debug!(
+                "Skipping local-only IMAP folder {} ({}) during paginated sync",
+                folder.name, folder.remote_id
+            );
+            return Ok(());
+        }
+
+        const BATCH_SIZE: usize = 200;
+        let mut total_synced = 0u32;
+        let server = self.provider.inner().config().host.clone();
+
+        let imap_date = if let Some(date_str) = since_date {
+            Some(Self::format_imap_date(date_str)?)
+        } else {
+            None
+        };
+
+        info!(
+            "Starting paginated sync for folder {}{}",
+            folder.name,
+            imap_date.as_ref().map(|d| format!(" since {}", d)).unwrap_or_default()
+        );
+
+        self.base.emit_sync_started("initial");
+
+        if let Some(ref date) = imap_date {
+            // ── Date-filtered sync ─────────────────────────────────────────────
+            // Use SEARCH SINCE + pagination (existing path)
+            let mut batch_offset = 0u32;
+            let mut total_count: Option<u32> = None;
+
+            loop {
+                if self.is_cancelled() {
+                    info!("Paginated sync cancelled after {} messages in {}", total_synced, folder.name);
+                    self.base.emit_sync_error("initial", "同步已取消");
+                    return Ok(());
+                }
+
+                self.base.emit_log(
+                    SyncLogEntry::new(&self.base.account_id, &server, "fetch_batch")
+                        .with_request(format!(
+                            "folder={} SEARCH SINCE {} offset={} limit={}",
+                            folder.name, date, batch_offset, BATCH_SIZE
+                        )),
+                );
+
+                let (batch, total) = match self.provider
+                    .inner()
+                    .fetch_messages_with_date_offset(&folder.remote_id, date, batch_offset, BATCH_SIZE as u32)
+                    .await
+                {
+                    Ok(result) => {
+                        self.base.emit_log(
+                            SyncLogEntry::new(&self.base.account_id, &server, "fetch_batch")
+                                .with_response(format!(
+                                    "folder={} got {} msgs (total={})",
+                                    folder.name, result.0.len(), result.1
+                                ))
+                                .with_message_count(result.0.len() as u32),
+                        );
+                        result
+                    }
+                    Err(e) => {
+                        self.base.emit_log(
+                            SyncLogEntry::new(&self.base.account_id, &server, "fetch_batch")
+                                .with_error(format!("folder={} {}", folder.name, e)),
+                        );
+                        return Err(e);
+                    }
+                };
+
+                if batch.is_empty() {
+                    break;
+                }
+
+                if total_count.is_none() {
+                    total_count = Some(total);
+                }
+
+                let count = self.process_synced_messages(&batch, folder).await?;
+                total_synced += count;
+                batch_offset += BATCH_SIZE as u32;
+
+                let percentage = total_count.map(|t| {
+                    if t > 0 { (total_synced as f32 / t as f32) * 100.0 } else { 0.0 }
+                });
+                self.base.progress_tx.as_ref().map(|tx| {
+                    let _ = tx.send(SyncProgress {
+                        account_id: self.base.account_id.clone(),
+                        status: "syncing".to_string(),
+                        phase: "initial".to_string(),
+                        message: Some(format!(
+                            "已同步 {} / {} 封",
+                            total_synced,
+                            total_count.map(|n| n.to_string()).unwrap_or("?".into())
+                        )),
+                        progress: Some(SyncProgressDetail {
+                            current: total_synced,
+                            total: total_count,
+                            percentage,
+                        }),
+                    });
+                });
+
+                if batch.len() < BATCH_SIZE {
+                    break;
+                }
+            }
+        } else {
+            // ── Full sync ("all" strategy) ──────────────────────────────────────
+            // Step 1: get all UIDs via UID SEARCH ALL
+            self.base.emit_log(
+                SyncLogEntry::new(&self.base.account_id, &server, "list_uids")
+                    .with_request(format!("folder={} UID SEARCH ALL", folder.name)),
+            );
+            let all_uids = match self.provider.inner().fetch_all_uids(&folder.remote_id).await {
+                Ok(uids) => {
+                    self.base.emit_log(
+                        SyncLogEntry::new(&self.base.account_id, &server, "list_uids")
+                            .with_response(format!(
+                                "folder={} found {} UIDs",
+                                folder.name, uids.len()
+                            ))
+                            .with_message_count(uids.len() as u32),
+                    );
+                    uids
+                }
+                Err(e) => {
+                    self.base.emit_log(
+                        SyncLogEntry::new(&self.base.account_id, &server, "list_uids")
+                            .with_error(format!("folder={} {}", folder.name, e)),
+                    );
+                    return Err(e);
+                }
+            };
+
+            let total_count = all_uids.len() as u32;
+
+            // Step 2: fetch in batches by UID
+            for (batch_idx, uid_chunk) in all_uids.chunks(BATCH_SIZE).enumerate() {
+                if self.is_cancelled() {
+                    info!("Full sync cancelled after {} messages in {}", total_synced, folder.name);
+                    self.base.emit_sync_error("initial", "同步已取消");
+                    return Ok(());
+                }
+
+                let uid_preview: Vec<String> = uid_chunk.iter().take(3).map(|u| u.to_string()).collect();
+                self.base.emit_log(
+                    SyncLogEntry::new(&self.base.account_id, &server, "fetch_batch")
+                        .with_request(format!(
+                            "folder={} UID FETCH uids=[{}{}] (batch {}/{})",
+                            folder.name,
+                            uid_preview.join(","),
+                            if uid_chunk.len() > 3 { "..." } else { "" },
+                            batch_idx + 1,
+                            (total_count as usize).div_ceil(BATCH_SIZE),
+                        )),
+                );
+
+                let batch = match self.provider.inner().fetch_messages_by_uids(&folder.remote_id, uid_chunk).await {
+                    Ok(msgs) => {
+                        self.base.emit_log(
+                            SyncLogEntry::new(&self.base.account_id, &server, "fetch_batch")
+                                .with_response(format!(
+                                    "folder={} fetched {} msgs",
+                                    folder.name, msgs.len()
+                                ))
+                                .with_message_count(msgs.len() as u32),
+                        );
+                        msgs
+                    }
+                    Err(e) => {
+                        self.base.emit_log(
+                            SyncLogEntry::new(&self.base.account_id, &server, "fetch_batch")
+                                .with_error(format!("folder={} batch {} {}", folder.name, batch_idx + 1, e)),
+                        );
+                        return Err(e);
+                    }
+                };
+
+                let count = self.process_synced_messages(&batch, folder).await?;
+                total_synced += count;
+
+                let percentage = if total_count > 0 {
+                    Some((total_synced as f32 / total_count as f32) * 100.0)
+                } else {
+                    None
+                };
+                self.base.progress_tx.as_ref().map(|tx| {
+                    let _ = tx.send(SyncProgress {
+                        account_id: self.base.account_id.clone(),
+                        status: "syncing".to_string(),
+                        phase: "initial".to_string(),
+                        message: Some(format!("已同步 {} / {} 封", total_synced, total_count)),
+                        progress: Some(SyncProgressDetail {
+                            current: total_synced,
+                            total: Some(total_count),
+                            percentage,
+                        }),
+                    });
+                });
+
+                info!(
+                    "Full sync progress: {} / {} in {}",
+                    total_synced, total_count, folder.name
+                );
+            }
+        }
+
+        info!(
+            "Paginated sync completed: {} messages synced from {}",
+            total_synced, folder.name
+        );
+
+        self.base.emit_sync_completed("initial");
+        Ok(())
+    }
+
+    /// Process a batch of synced messages (parse, thread, store).
+    /// Returns the number of new messages stored.
+    async fn process_synced_messages(
+        &self,
+        raw_messages: &[(u32, Vec<u8>)],
+        folder: &pebble_core::Folder,
+    ) -> Result<u32> {
+        if raw_messages.is_empty() {
+            return Ok(0);
+        }
+
+        // Bulk-check which UIDs already exist to avoid N+1 queries
+        let all_remote_ids: Vec<String> = raw_messages
+            .iter()
+            .map(|(uid, _)| uid.to_string())
+            .collect();
+        let existing_ids = self
+            .base
+            .store
+            .get_existing_remote_ids_in_folder(&self.base.account_id, &folder.id, &all_remote_ids)
+            .unwrap_or_default();
+
+        // Parse all raw messages upfront
+        let parsed_messages: Vec<(u32, Result<crate::parser::ParsedMessage>)> = raw_messages
+            .iter()
+            .filter(|(uid, _)| {
+                let remote_id = uid.to_string();
+                !existing_ids.contains(&remote_id)
+            })
+            .map(|(uid, raw)| {
+                let parsed = parse_raw_email(raw);
+                (*uid, parsed)
+            })
+            .collect();
+
+        // Collect all referenced message-ID headers from this batch
+        let ref_ids = collect_ref_ids_from_parsed(&parsed_messages);
+
+        // Load thread mappings only for the IDs referenced by this batch
+        let mut thread_mappings = self
+            .base
+            .store
+            .get_thread_mappings_for_refs(&self.base.account_id, &ref_ids)
+            .unwrap_or_default();
+
+        let mut stored_count = 0u32;
+
+        for (uid, parse_result) in parsed_messages {
+            let remote_id = uid.to_string();
+
+            let parsed = match parse_result {
+                Ok(p) => p,
+                Err(e) => {
+                    let reason = e.to_string();
+                    let _ = self.base.store.upsert_sync_failure(
+                        &self.base.account_id,
+                        &folder.id,
+                        &remote_id,
+                        "imap",
+                        &reason,
+                    );
+                    warn!("Failed to parse message UID {}: {}", uid, e);
+                    continue;
+                }
+            };
+
+            let now = now_timestamp();
+
+            // Build a temporary message to compute thread_id
+            let mut msg = Message {
+                id: new_id(),
+                account_id: self.base.account_id.clone(),
+                remote_id: remote_id.clone(),
+                message_id_header: parsed.message_id_header.clone(),
+                in_reply_to: parsed.in_reply_to.clone(),
+                references_header: parsed.references_header.clone(),
+                thread_id: None,
+                subject: parsed.subject.clone(),
+                snippet: parsed.snippet.clone(),
+                from_address: parsed.from_address.clone(),
+                from_name: parsed.from_name.clone(),
+                to_list: parsed.to_list.clone(),
+                cc_list: parsed.cc_list.clone(),
+                bcc_list: parsed.bcc_list.clone(),
+                body_text: parsed.body_text.clone(),
+                body_html_raw: parsed.body_html.clone(),
+                has_attachments: parsed.has_attachments,
+                is_read: false,
+                is_starred: false,
+                is_draft: false,
+                date: parsed.date,
+                remote_version: None,
+                is_deleted: false,
+                deleted_at: None,
+                created_at: now,
+                updated_at: now,
+            };
+
+            let thread_id = compute_thread_id(&msg, &thread_mappings);
+            msg.thread_id = Some(thread_id);
+
+            match self
+                .base
+                .store
+                .insert_message(&msg, std::slice::from_ref(&folder.id))
+            {
+                Ok(()) => {
+                    stored_count += 1;
+                    let _ = self.base.store.clear_sync_failure(
+                        &self.base.account_id,
+                        &folder.id,
+                        &remote_id,
+                    );
+                    // Update in-memory thread mappings
+                    if let (Some(mid), Some(tid)) = (&msg.message_id_header, &msg.thread_id) {
+                        thread_mappings.insert(mid.clone(), tid.clone());
+                    }
+
+                    persist_message_attachments_async(
+                        Arc::clone(&self.base.store),
+                        self.base.attachments_dir.clone(),
+                        msg.id.clone(),
+                        parsed.attachments,
+                    )
+                    .await;
+
+                    // Notify listeners about the new message
+                    self.base.emit_message(StoredMessage {
+                        message: msg.clone(),
+                        folder_ids: vec![folder.id.clone()],
+                        notify: false,
+                    });
+                }
+                Err(e) => {
+                    let reason = e.to_string();
+                    let _ = self.base.store.upsert_sync_failure(
+                        &self.base.account_id,
+                        &folder.id,
+                        &remote_id,
+                        "imap",
+                        &reason,
+                    );
+                    warn!("Failed to store message UID {}: {}", uid, e);
+                }
+            }
+        }
+
+        Ok(stored_count)
     }
 
     /// Sync a folder: fetch raw messages, parse, compute threads, store.
@@ -934,15 +1525,47 @@ impl SyncWorker {
             return Ok(0);
         }
 
-        let raw_messages = self
+        let server = self.provider.inner().config().host.clone();
+        let uid_set = match since_uid {
+            Some(uid) => format!("{}:* (limit {})", uid + 1, limit),
+            None => format!("1:* (limit {})", limit),
+        };
+        self.base.emit_log(
+            SyncLogEntry::new(&self.base.account_id, &server, "fetch_messages")
+                .with_request(format!("SELECT {} UID FETCH {}", folder.name, uid_set)),
+        );
+
+        let raw_messages = match self
             .provider
             .inner()
             .fetch_messages_raw(&folder.remote_id, since_uid, limit)
-            .await?;
+            .await
+        {
+            Ok(msgs) => msgs,
+            Err(e) => {
+                self.base.emit_log(
+                    SyncLogEntry::new(&self.base.account_id, &server, "fetch_messages")
+                        .with_request(format!("folder={}", folder.name))
+                        .with_error(e.to_string()),
+                );
+                return Err(e);
+            }
+        };
 
         if raw_messages.is_empty() {
+            self.base.emit_log(
+                SyncLogEntry::new(&self.base.account_id, &server, "fetch_messages")
+                    .with_response(format!("folder={} no new messages", folder.name))
+                    .with_message_count(0),
+            );
             return Ok(0);
         }
+
+        self.base.emit_log(
+            SyncLogEntry::new(&self.base.account_id, &server, "fetch_messages")
+                .with_response(format!("folder={} fetched {} raw", folder.name, raw_messages.len()))
+                .with_message_count(raw_messages.len() as u32),
+        );
 
         // Bulk-check which UIDs already exist to avoid N+1 queries
         let all_remote_ids: Vec<String> = raw_messages
@@ -1097,6 +1720,15 @@ impl SyncWorker {
             }
         }
 
+        if stored_count > 0 {
+            let server = self.provider.inner().config().host.clone();
+            self.base.emit_log(
+                SyncLogEntry::new(&self.base.account_id, &server, "store_messages")
+                    .with_response(format!("folder={} stored {} new messages", folder.name, stored_count))
+                    .with_message_count(stored_count),
+            );
+        }
+
         Ok(stored_count)
     }
 
@@ -1164,9 +1796,19 @@ impl SyncWorker {
                     "IMAP connection failed while polling folder {} account {}; reconnecting before retry: {}",
                     folder.name, self.base.account_id, e
                 );
+                let server = self.provider.inner().config().host.clone();
+                self.base.emit_log(
+                    SyncLogEntry::new(&self.base.account_id, &server, "reconnect")
+                        .with_request(format!("poll folder={} reason={}", folder.name, e))
+                        .with_response("reconnecting...".to_string()),
+                );
                 let _ = self.provider.disconnect().await;
                 match self.provider.connect().await {
                     Ok(()) => {
+                        self.base.emit_log(
+                            SyncLogEntry::new(&self.base.account_id, &server, "reconnect")
+                                .with_response(format!("folder={} reconnected OK, retrying poll", folder.name)),
+                        );
                         if let Err(retry_error) = self.poll_imap_folder_once(folder).await {
                             warn!(
                                 "Poll retry failed for folder {} account {} after reconnect: {}",
@@ -1179,6 +1821,10 @@ impl SyncWorker {
                                     folder.name, retry_error
                                 ),
                             );
+                            self.base.emit_log(
+                                SyncLogEntry::new(&self.base.account_id, &server, "reconnect")
+                                    .with_error(format!("poll retry failed folder={} {}", folder.name, retry_error)),
+                            );
                             if is_retryable_imap_connection_error(&retry_error) {
                                 return Some(retry_error);
                             }
@@ -1189,6 +1835,10 @@ impl SyncWorker {
                         warn!(
                             "Reconnect failed while polling folder {} account {}: {}",
                             folder.name, self.base.account_id, reconnect_error
+                        );
+                        self.base.emit_log(
+                            SyncLogEntry::new(&self.base.account_id, &server, "reconnect")
+                                .with_error(format!("folder={} reconnect failed: {}", folder.name, reconnect_error)),
                         );
                         Some(reconnect_error)
                     }
@@ -1202,6 +1852,11 @@ impl SyncWorker {
                 self.base.emit_error(
                     "poll",
                     &format!("Poll failed for folder {}: {}", folder.name, e),
+                );
+                let server = self.provider.inner().config().host.clone();
+                self.base.emit_log(
+                    SyncLogEntry::new(&self.base.account_id, &server, "poll_folder")
+                        .with_error(format!("folder={} {}", folder.name, e)),
                 );
                 None
             }
@@ -1217,6 +1872,12 @@ impl SyncWorker {
             return Ok(());
         }
 
+        let server = self.provider.inner().config().host.clone();
+        self.base.emit_log(
+            SyncLogEntry::new(&self.base.account_id, &server, "poll_folder")
+                .with_request(format!("folder={}", folder.name)),
+        );
+
         let cursor = self.try_imap_folder_cursor_for_sync(folder).await?;
         let since_uid = cursor.last_uid;
 
@@ -1225,6 +1886,17 @@ impl SyncWorker {
             info!(
                 "Polled {} new messages from {} for account {}",
                 count, folder.name, self.base.account_id
+            );
+            self.base.emit_log(
+                SyncLogEntry::new(&self.base.account_id, &server, "poll_folder")
+                    .with_response(format!("folder={} {} new messages", folder.name, count))
+                    .with_message_count(count),
+            );
+        } else {
+            self.base.emit_log(
+                SyncLogEntry::new(&self.base.account_id, &server, "poll_folder")
+                    .with_response(format!("folder={} up to date", folder.name))
+                    .with_message_count(0),
             );
         }
         if let Err(e) = self.persist_imap_folder_cursor_after_sync(folder, cursor) {

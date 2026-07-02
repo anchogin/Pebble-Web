@@ -6,6 +6,12 @@ export const ALL_ACCOUNTS_FOLDER_PREFIX = "all:";
 
 export type FolderRole = NonNullable<Folder["role"]>;
 
+export interface FolderTreeNode {
+  folder: Folder | null;
+  label: string;
+  children: FolderTreeNode[];
+}
+
 const SYSTEM_ROLE_ORDER: FolderRole[] = ["inbox", "sent", "archive", "drafts", "trash", "spam"];
 
 const SYSTEM_ROLE_NAMES: Record<FolderRole, string> = {
@@ -98,4 +104,42 @@ export function unreadCountForFolder(
 ): number {
   const matchingFolderIds = folderIdsForSelection(folderId, folders);
   return matchingFolderIds.reduce((sum, id) => sum + (countsByFolderId[id] ?? 0), 0);
+}
+
+export function buildFolderTree(customFolders: Folder[]): FolderTreeNode[] {
+  const nodeByPath = new Map<string, FolderTreeNode>();
+  const roots: FolderTreeNode[] = [];
+
+  const sorted = [...customFolders].sort(
+    (a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name),
+  );
+
+  for (const folder of sorted) {
+    const parts = folder.name.split("/").map((p) => p.trim()).filter(Boolean);
+
+    for (let i = 0; i < parts.length; i++) {
+      const path = parts.slice(0, i + 1).join("/");
+      const isLeaf = i === parts.length - 1;
+
+      if (!nodeByPath.has(path)) {
+        const node: FolderTreeNode = {
+          folder: isLeaf ? folder : null,
+          label: parts[i],
+          children: [],
+        };
+        nodeByPath.set(path, node);
+
+        if (i === 0) {
+          roots.push(node);
+        } else {
+          const parentPath = parts.slice(0, i).join("/");
+          nodeByPath.get(parentPath)!.children.push(node);
+        }
+      } else if (isLeaf) {
+        nodeByPath.get(path)!.folder = folder;
+      }
+    }
+  }
+
+  return roots;
 }

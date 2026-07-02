@@ -956,6 +956,102 @@ impl ImapProvider {
         Ok(results)
     }
 
+    /// Fetch messages with date filter and pagination.
+    /// Returns `(uids, total_count)` where total_count is the total matching messages.
+    /// 
+    /// - `since_date`: IMAP date format "DD-Mon-YYYY" (e.g., "01-Jan-2020")
+    /// - `offset`: starting position (0-based)
+    /// - `limit`: maximum number of messages to fetch
+    pub async fn fetch_messages_with_date_offset(
+        &self,
+        mailbox: &str,
+        since_date: &str,
+        offset: u32,
+        limit: u32,
+    ) -> Result<(Vec<(u32, Vec<u8>)>, u32)> {
+        let mut guard = self.session.lock().await;
+        let sess = guard
+            .as_mut()
+            .ok_or_else(|| PebbleError::Network("Not connected".to_string()))?;
+
+        macro_rules! do_fetch_date {
+            ($s:expr) => {{
+                let mailbox_info =
+                    with_imap_timeout("SELECT", IMAP_COMMAND_TIMEOUT_SECS, $s.select(mailbox))
+                        .await?;
+
+                let exists = mailbox_info.exists;
+                if exists == 0 {
+                    return Ok((Vec::new(), 0));
+                }
+
+                // Search for messages since the given date
+                let search_query = format!("SINCE {}", since_date);
+                let uids = with_imap_timeout(
+                    "UID SEARCH",
+                    IMAP_COMMAND_TIMEOUT_SECS,
+                    $s.uid_search(&search_query),
+                )
+                .await?;
+                // uid_search returns HashSet<u32>, not a stream
+                let uids: Vec<u32> = uids.into_iter().collect();
+
+                let total_count = uids.len() as u32;
+                if total_count == 0 {
+                    return Ok((Vec::new(), 0));
+                }
+
+                // Apply pagination
+                let start_idx = offset as usize;
+                if start_idx >= uids.len() {
+                    return Ok((Vec::new(), total_count));
+                }
+
+                let end_idx = (start_idx + limit as usize).min(uids.len());
+                let page_uids = &uids[start_idx..end_idx];
+
+                if page_uids.is_empty() {
+                    return Ok((Vec::new(), total_count));
+                }
+
+                // Fetch the messages for this page
+                let uid_set: String = page_uids
+                    .iter()
+                    .map(|u| u.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
+
+                let fetches = with_imap_timeout(
+                    "UID FETCH",
+                    IMAP_COMMAND_TIMEOUT_SECS,
+                    $s.uid_fetch(&uid_set, "(UID BODY.PEEK[])"),
+                )
+                .await?;
+                let fetches: Vec<async_imap::types::Fetch> = with_imap_timeout(
+                    "UID FETCH collect",
+                    IMAP_COMMAND_TIMEOUT_SECS,
+                    fetches.try_collect(),
+                )
+                .await?;
+
+                let mut results = Vec::new();
+                for fetch in fetches {
+                    if let Some(uid) = fetch.uid {
+                        if let Some(body) = fetch.body() {
+                            results.push((uid, body.to_vec()));
+                        }
+                    } else {
+                        tracing::warn!("Skipping message without UID (seq={})", fetch.message);
+                    }
+                }
+
+                Ok((results, total_count))
+            }};
+        }
+
+        do_fetch_date!(sess)
+    }
+
     /// Fetch flags for a set of UIDs. Returns `(uid, is_read, is_starred)`.
     pub async fn fetch_flags(&self, mailbox: &str, uids: &[u32]) -> Result<Vec<(u32, bool, bool)>> {
         if uids.is_empty() {
@@ -1244,6 +1340,61 @@ impl ImapProvider {
 
         let results = do_search!(sess);
 
+        Ok(results)
+    }
+
+    pub async fn fetch_messages_by_uids(
+        &self,
+        mailbox: &str,
+        uids: &[u32],
+    ) -> Result<Vec<(u32, Vec<u8>)>> {
+        if uids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let uid_set: String = uids
+            .iter()
+            .map(|u| u.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+
+        let mut guard = self.session.lock().await;
+        let sess = guard
+            .as_mut()
+            .ok_or_else(|| PebbleError::Network("Not connected".to_string()))?;
+
+        macro_rules! do_fetch_uids {
+            ($s:expr) => {{
+                with_imap_timeout("SELECT", IMAP_COMMAND_TIMEOUT_SECS, $s.select(mailbox)).await?;
+
+                let fetches = with_imap_timeout(
+                    "UID FETCH",
+                    IMAP_COMMAND_TIMEOUT_SECS,
+                    $s.uid_fetch(&uid_set, "(UID BODY.PEEK[])"),
+                )
+                .await?;
+                let fetches: Vec<async_imap::types::Fetch> = with_imap_timeout(
+                    "UID FETCH collect",
+                    IMAP_COMMAND_TIMEOUT_SECS,
+                    fetches.try_collect(),
+                )
+                .await?;
+
+                let mut results = Vec::new();
+                for fetch in fetches {
+                    if let Some(uid) = fetch.uid {
+                        if let Some(body) = fetch.body() {
+                            results.push((uid, body.to_vec()));
+                        }
+                    } else {
+                        tracing::warn!("Skipping message without UID (seq={})", fetch.message);
+                    }
+                }
+                results
+            }};
+        }
+
+        let results = do_fetch_uids!(sess);
         Ok(results)
     }
 

@@ -84,6 +84,11 @@ pub async fn send_email(
             },
             proxy: None,
         },
+        AccountCredentials::Gmail(_) => {
+            return Err(ApiError::BadRequest(
+                "Sending via Gmail API is not yet supported through this endpoint".to_string(),
+            ));
+        }
     };
 
     let sender = SmtpSender::new(

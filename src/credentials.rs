@@ -20,6 +20,14 @@ pub struct SmtpCredentials {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GmailCredentials {
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+    pub expires_at: Option<i64>,
+    pub email: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum AccountCredentials {
     #[serde(rename = "imap")]
@@ -27,6 +35,8 @@ pub enum AccountCredentials {
         imap: ImapCredentials,
         smtp: SmtpCredentials,
     },
+    #[serde(rename = "gmail")]
+    Gmail(GmailCredentials),
 }
 
 pub fn encrypt_credentials(

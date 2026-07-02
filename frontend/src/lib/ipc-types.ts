@@ -19,6 +19,11 @@ export interface Account {
   provider: "imap" | "gmail" | "outlook";
   created_at: number;
   updated_at: number;
+  /** Sync state with strategy configuration (added in web backend) */
+  sync_state?: {
+    sync_strategy?: 'recent' | 'all' | 'since_date';
+    sync_since_date?: string;
+  };
 }
 
 /** @rust pebble-core/src/types.rs → Folder */
@@ -156,6 +161,42 @@ export type PrivacyMode = "Strict" | { TrustSender: string } | "LoadOnce" | "Off
 /** @rust pebble-mail/src/imap.rs → ConnectionSecurity (rename_all = "lowercase") */
 export type ConnectionSecurity = "tls" | "starttls" | "plain";
 
+/**
+ * Full account configuration surfaced for the edit form (no secrets).
+ * @rust src/routes/accounts.rs → AccountConfigResponse
+ */
+export interface AccountConfig {
+  id: string;
+  email: string;
+  display_name: string;
+  color?: string | null;
+  provider: string;
+  imap_host?: string;
+  imap_port?: number;
+  imap_security?: ConnectionSecurity;
+  smtp_host?: string;
+  smtp_port?: number;
+  smtp_security?: ConnectionSecurity;
+}
+
+/** @rust src/routes/sync.rs → UpdateSyncConfigRequest (rename_all = "camelCase") */
+export interface SyncConfig {
+  syncStrategy: "recent" | "all" | "since_date";
+  syncSinceDate?: string;
+}
+
+/** @rust src/sync.rs → sync_progress WebSocket payload */
+export interface SyncProgress {
+  status: string;
+  phase: string;
+  message?: string;
+  progress?: {
+    current: number;
+    total?: number;
+    percentage?: number;
+  };
+}
+
 /** @rust src-tauri/src/commands/accounts.rs → AddAccountRequest */
 export interface AddAccountRequest {
   email: string;
@@ -171,6 +212,9 @@ export interface AddAccountRequest {
   smtp_security: ConnectionSecurity;
   proxy_host?: string;
   proxy_port?: number;
+  // Sync strategy configuration
+  sync_strategy?: 'recent' | 'all' | 'since_date';
+  sync_since_date?: string;
 }
 
 /** @rust pebble-core/src/types.rs -> HttpProxyConfig */

@@ -7,16 +7,26 @@ class WebSocketClient {
   private authenticated = false;
 
   connect() {
+    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+      console.log("[WS] already connected/connecting, skipping connect()");
+      return;
+    }
+
     const token = localStorage.getItem("pebble_token");
-    if (!token) return;
+    if (!token) {
+      console.warn("[WS] no pebble_token in localStorage, skipping connect");
+      return;
+    }
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const url = `${protocol}//${window.location.host}/api/v1/ws`;
+    console.log("[WS] connecting to", url, "authenticated=", this.authenticated);
 
     this.ws = new WebSocket(url);
     this.authenticated = false;
 
     this.ws.onopen = () => {
+      console.log("[WS] connection opened, sending token");
       // Send token as first message for authentication
       this.ws?.send(token);
     };
@@ -27,10 +37,15 @@ class WebSocketClient {
         if (!this.authenticated) {
           if (msg.type === "authenticated") {
             this.authenticated = true;
+            console.log("[WS] authenticated ✓");
           } else if (msg.type === "error") {
+            console.warn("[WS] auth error, closing:", msg);
             this.ws?.close();
           }
           return;
+        }
+        if (msg.type?.startsWith("sync")) {
+          console.log("[WS] sync msg:", msg.type, msg);
         }
         const handlers = this.handlers.get(msg.type) || [];
         handlers.forEach((h) => h(msg));
@@ -42,16 +57,19 @@ class WebSocketClient {
     };
 
     this.ws.onclose = (event) => {
+      console.log("[WS] closed, code=", event.code, "wasAuth=", this.authenticated);
       const wasAuthenticated = this.authenticated;
       this.authenticated = false;
-      // Do not reconnect if the connection was closed due to auth failure
-      // (close code 1008 = policy violation, or never authenticated successfully)
-      if (wasAuthenticated && event.code !== 1008) {
+      // Do not reconnect on auth failures (1008 = policy violation, 4001 = our custom unauthorized)
+      const isAuthFailure = event.code === 1008 || event.code === 4001;
+      if (wasAuthenticated && !isAuthFailure) {
+        console.log("[WS] scheduling reconnect in 5s");
         this.reconnectTimer = setTimeout(() => this.connect(), 5000);
       }
     };
 
-    this.ws.onerror = () => {
+    this.ws.onerror = (err) => {
+      console.error("[WS] error:", err);
       this.ws?.close();
     };
   }

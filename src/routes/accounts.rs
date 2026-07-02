@@ -1,12 +1,12 @@
-use crate::credentials::{encrypt_credentials, AccountCredentials, ImapCredentials, SmtpCredentials};
+use crate::credentials::{decrypt_credentials, encrypt_credentials, AccountCredentials, ImapCredentials, SmtpCredentials};
 use crate::error::ApiError;
+use crate::routes::oauth::{fetch_google_userinfo, google_oauth_manager};
 use crate::state::AppStateRef;
-use axum::{
-    extract::{Path, State},
-    Json,
-};
+use axum::extract::{Path, State};
+use axum::Json;
 use pebble_core::{new_id, now_timestamp, Account, ProviderType};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 #[derive(Serialize)]
 pub struct AccountResponse {
@@ -36,6 +36,123 @@ impl From<Account> for AccountResponse {
             updated_at: a.updated_at,
         }
     }
+}
+
+/// Full account configuration surfaced to the edit form.
+/// Mirrors the frontend `AccountConfig` interface (camelCase JSON).
+/// Never includes secrets — IMAP/SMTP fields come from decrypted credentials
+/// with the password omitted.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountConfigResponse {
+    pub id: String,
+    pub email: String,
+    pub display_name: String,
+    pub color: Option<String>,
+    pub provider: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub imap_host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub imap_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub imap_security: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub smtp_host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub smtp_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub smtp_security: Option<String>,
+}
+
+pub async fn get_account(
+    State(state): State<AppStateRef>,
+    Path(account_id): Path<String>,
+) -> Result<Json<AccountConfigResponse>, ApiError> {
+    let store = state.store.clone();
+    let account_id_for_query = account_id.clone();
+    let account = store
+        .with_read_async(move |conn| {
+            let result = conn
+                .query_row(
+                    "SELECT id, email, display_name, color, provider, created_at, updated_at
+                     FROM accounts WHERE id = ?1",
+                    rusqlite::params![account_id_for_query],
+                    |row| {
+                        let provider_str: String = row.get(4)?;
+                        let provider = match provider_str.as_str() {
+                            "gmail" => ProviderType::Gmail,
+                            "outlook" => ProviderType::Outlook,
+                            _ => ProviderType::Imap,
+                        };
+                        Ok(Account {
+                            id: row.get(0)?,
+                            email: row.get(1)?,
+                            display_name: row.get(2)?,
+                            color: row.get(3)?,
+                            provider,
+                            created_at: row.get(5)?,
+                            updated_at: row.get(6)?,
+                        })
+                    },
+                )
+                .optional()?;
+            Ok(result)
+        })
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to read account: {e}")))?
+        .ok_or_else(|| ApiError::NotFound(format!("Account {account_id} not found")))?;
+
+    let provider = match account.provider {
+        ProviderType::Imap => "imap",
+        ProviderType::Gmail => "gmail",
+        ProviderType::Outlook => "outlook",
+    };
+
+    let (imap_host, imap_port, imap_security, smtp_host, smtp_port, smtp_security) =
+        if matches!(account.provider, ProviderType::Imap) {
+            match state.store.get_account_sync_state(&account.id) {
+                Ok(Some(ss_json)) => {
+                    let ss_val: serde_json::Value = serde_json::from_str(&ss_json)
+                        .map_err(|e| ApiError::Internal(format!("Invalid sync state: {e}")))?;
+                    let encrypted_hex = ss_val
+                        .get("credentials")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            ApiError::BadRequest("No credentials in account".to_string())
+                        })?
+                        .to_string();
+                    match decrypt_credentials(&state.crypto, &encrypted_hex) {
+                        Ok(AccountCredentials::Imap { imap, smtp }) => (
+                            Some(imap.host),
+                            Some(imap.port),
+                            Some(imap.security),
+                            Some(smtp.host),
+                            Some(smtp.port),
+                            Some(smtp.security),
+                        ),
+                        Ok(AccountCredentials::Gmail(_)) => (None, None, None, None, None, None),
+                        Err(_) => (None, None, None, None, None, None),
+                    }
+                }
+                _ => (None, None, None, None, None, None),
+            }
+        } else {
+            (None, None, None, None, None, None)
+        };
+
+    Ok(Json(AccountConfigResponse {
+        id: account.id,
+        email: account.email,
+        display_name: account.display_name,
+        color: account.color,
+        provider: provider.to_string(),
+        imap_host,
+        imap_port,
+        imap_security,
+        smtp_host,
+        smtp_port,
+        smtp_security,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -318,6 +435,9 @@ pub async fn update_account(
                         if let Some(p) = body.smtp_port { smtp.port = p; }
                         if let Some(ref s) = body.smtp_security { smtp.security = s.clone(); }
                     }
+                    AccountCredentials::Gmail(_) => {
+                        // Gmail credentials are not updated here.
+                    }
                 }
 
                 let encrypted = encrypt_credentials(&crypto, &creds)
@@ -390,55 +510,94 @@ pub async fn test_account_connection(
     State(state): State<AppStateRef>,
     Path(account_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let store = state.store.clone();
+    let ss_json = state
+        .store
+        .get_account_sync_state(&account_id)
+        .map_err(|e| ApiError::Internal(format!("DB error: {e}")))?
+        .ok_or_else(|| ApiError::NotFound("Account sync state not found".to_string()))?;
 
-    let sync_state_json = store
-        .with_read_async(move |conn| {
-            let result: Option<Option<String>> = conn
-                .query_row(
-                    "SELECT sync_state FROM accounts WHERE id = ?1",
-                    rusqlite::params![account_id],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            Ok(result.flatten())
-        })
-        .await
-        .map_err(|e| ApiError::Internal(format!("Failed to get account: {e}")))?
-        .ok_or_else(|| ApiError::NotFound("Account not found or has no credentials".to_string()))?;
+    let encrypted_hex =
+        serde_json::from_str::<serde_json::Value>(&ss_json)
+            .map_err(|_| ApiError::Internal("Invalid sync state JSON".to_string()))?
+            .get("credentials")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ApiError::BadRequest("No credentials in account".to_string()))?
+            .to_string();
 
-    let sync_state: serde_json::Value = serde_json::from_str(&sync_state_json)
-        .map_err(|e| ApiError::Internal(format!("Invalid sync state: {e}")))?;
-
-    let encrypted_hex = sync_state["credentials"]
-        .as_str()
-        .ok_or_else(|| ApiError::BadRequest("No credentials in account".to_string()))?;
-
-    let creds = crate::credentials::decrypt_credentials(&state.crypto, encrypted_hex)
+    let mut creds = decrypt_credentials(&state.crypto, &encrypted_hex)
         .map_err(|e| ApiError::Internal(format!("Failed to decrypt credentials: {e}")))?;
 
-    let imap_creds = match &creds {
-        crate::credentials::AccountCredentials::Imap { imap, .. } => imap,
-    };
+    match &mut creds {
+        AccountCredentials::Imap { imap, .. } => {
+            let security = match imap.security.as_str() {
+                "starttls" => pebble_mail::ConnectionSecurity::StartTls,
+                "plain" => pebble_mail::ConnectionSecurity::Plain,
+                _ => pebble_mail::ConnectionSecurity::Tls,
+            };
 
-    let security = match imap_creds.security.as_str() {
-        "starttls" => pebble_mail::ConnectionSecurity::StartTls,
-        "plain" => pebble_mail::ConnectionSecurity::Plain,
-        _ => pebble_mail::ConnectionSecurity::Tls,
-    };
+            let config = pebble_mail::ImapConfig {
+                host: imap.host.clone(),
+                port: imap.port,
+                username: imap.username.clone(),
+                password: imap.password.clone(),
+                security,
+                proxy: None, // TODO: support proxy
+            };
 
-    let config = pebble_mail::ImapConfig {
-        host: imap_creds.host.clone(),
-        port: imap_creds.port,
-        username: imap_creds.username.clone(),
-        password: imap_creds.password.clone(),
-        security,
-        proxy: None,
-    };
+            match pebble_mail::ImapProvider::test_connection_with_login(&config).await {
+                Ok(report) => Ok(Json(json!({ "success": true, "message": report }))),
+                Err(e) => Err(ApiError::BadRequest(format!(
+                    "IMAP connection failed: {}",
+                    e
+                ))),
+            }
+        }
+        AccountCredentials::Gmail(gmail_creds) => {
+            // Test current token
+            if fetch_google_userinfo(&gmail_creds.access_token)
+                .await
+                .is_ok()
+            {
+                return Ok(Json(
+                    json!({ "success": true, "message": "Gmail token is valid." }),
+                ));
+            }
 
-    match pebble_mail::ImapProvider::test_connection_with_login(&config).await {
-        Ok(report) => Ok(Json(serde_json::json!({ "ok": true, "report": report }))),
-        Err(e) => Err(ApiError::BadRequest(format!("Connection failed: {e}"))),
+            // Token failed, try to refresh
+            let refresh_token = match gmail_creds.refresh_token.as_deref() {
+                Some(rt) => rt.to_string(),
+                None => {
+                    return Err(ApiError::BadRequest(
+                        "Gmail token is invalid and no refresh token is available.".to_string(),
+                    ));
+                }
+            };
+
+            let manager = google_oauth_manager(&state.config)?;
+            let new_pair = manager
+                .refresh_token(&refresh_token)
+                .await
+                .map_err(|e| ApiError::BadRequest(format!("Gmail token refresh failed: {e}")))?;
+
+            // Refresh succeeded, update credentials
+            gmail_creds.access_token = new_pair.access_token;
+            gmail_creds.expires_at = new_pair.expires_at;
+
+            let encrypted = encrypt_credentials(&state.crypto, &creds)
+                .map_err(|e| ApiError::Internal(format!("Encrypt failed: {e}")))?;
+
+            let mut sync_state_val: serde_json::Value = serde_json::from_str(&ss_json)
+                .map_err(|_| ApiError::Internal("Invalid sync state JSON".to_string()))?;
+
+            sync_state_val["credentials"] = serde_json::Value::String(encrypted);
+
+            state
+                .store
+                .update_account_sync_state(&account_id, &sync_state_val.to_string())
+                .map_err(|e| ApiError::Internal(format!("Failed to save new token: {e}")))?;
+
+            Ok(Json(json!({ "success": true, "message": "Gmail token was expired but successfully refreshed." })))
+        }
     }
 }
 
