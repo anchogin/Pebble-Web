@@ -1868,6 +1868,7 @@ dependencies = [
  "mail-parser",
  "mailparse",
  "pebble-core",
+ "pebble-rules",
  "pebble-store",
  "rand 0.8.6",
  "reqwest",

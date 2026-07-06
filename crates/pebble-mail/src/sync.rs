@@ -1469,6 +1469,11 @@ impl SyncWorker {
             {
                 Ok(()) => {
                     stored_count += 1;
+                    if let Err(e) =
+                        pebble_rules::run_rules_for_new_message(&msg, self.base.store.as_ref())
+                    {
+                        warn!(message_id = %msg.id, error = %e, "rules: run_rules_for_new_message failed");
+                    }
                     let _ = self.base.store.clear_sync_failure(
                         &self.base.account_id,
                         &folder.id,
@@ -1680,6 +1685,11 @@ impl SyncWorker {
             {
                 Ok(()) => {
                     stored_count += 1;
+                    if let Err(e) =
+                        pebble_rules::run_rules_for_new_message(&msg, self.base.store.as_ref())
+                    {
+                        warn!(message_id = %msg.id, error = %e, "rules: run_rules_for_new_message failed");
+                    }
                     let _ = self.base.store.clear_sync_failure(
                         &self.base.account_id,
                         &folder.id,
