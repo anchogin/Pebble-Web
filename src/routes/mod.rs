@@ -35,16 +35,27 @@ pub fn build_router(state: AppStateRef, static_dir: &str) -> Router {
         .route("/api/v1/health", get(health::health))
         .route("/api/v1/auth/login", post(auth::login))
         .route("/api/v1/ws", get(ws::ws_handler))
-        .route("/api/v1/oauth/google/callback", get(oauth::google_oauth_callback));
+        .route(
+            "/api/v1/oauth/google/callback",
+            get(oauth::google_oauth_callback),
+        );
 
     let protected_routes = Router::new()
         // OAuth
         .route("/api/v1/oauth/google/start", get(oauth::start_google_oauth))
-        .route("/api/v1/oauth/google/status/{session_id}", get(oauth::google_oauth_status))
+        .route(
+            "/api/v1/oauth/google/status/{session_id}",
+            get(oauth::google_oauth_status),
+        )
         // Accounts
         .route("/api/v1/accounts", get(accounts::list_accounts))
         .route("/api/v1/accounts", post(accounts::create_account))
-        .route("/api/v1/accounts/{account_id}", get(accounts::get_account).put(accounts::update_account).delete(accounts::delete_account))
+        .route(
+            "/api/v1/accounts/{account_id}",
+            get(accounts::get_account)
+                .put(accounts::update_account)
+                .delete(accounts::delete_account),
+        )
         .route(
             "/api/v1/accounts/{account_id}/test-connection",
             post(accounts::test_account_connection),
@@ -57,8 +68,6 @@ pub fn build_router(state: AppStateRef, static_dir: &str) -> Router {
             "/api/v1/test-imap-connection",
             post(accounts::test_imap_connection),
         )
-
-
         .route(
             "/api/v1/accounts/{account_id}/trusted-senders",
             get(trusted_senders::list_trusted_senders).post(trusted_senders::trust_sender),
@@ -70,7 +79,7 @@ pub fn build_router(state: AppStateRef, static_dir: &str) -> Router {
         // Folders
         .route(
             "/api/v1/accounts/{account_id}/folders",
-            get(folders::list_folders),
+            get(folders::list_folders).post(folders::create_folder),
         )
         .route(
             "/api/v1/accounts/{account_id}/folder-unread-counts",
@@ -199,6 +208,8 @@ pub fn build_router(state: AppStateRef, static_dir: &str) -> Router {
             "/api/v1/rules",
             get(rules::list_rules).post(rules::create_rule),
         )
+        .route("/api/v1/rules/execute-all", post(rules::execute_all_rules))
+        .route("/api/v1/rules/{id}/execute", post(rules::execute_rule))
         .route(
             "/api/v1/rules/{id}",
             put(rules::update_rule).delete(rules::delete_rule),

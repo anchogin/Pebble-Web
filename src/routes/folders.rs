@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, State},
     Json,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Serialize)]
@@ -18,6 +18,49 @@ pub struct FolderResponse {
     pub parent_id: Option<String>,
     pub is_system: bool,
     pub sort_order: i32,
+}
+
+#[derive(Deserialize)]
+pub struct CreateFolderRequest {
+    pub name: String,
+}
+
+pub async fn create_folder(
+    State(state): State<AppStateRef>,
+    Path(account_id): Path<String>,
+    Json(body): Json<CreateFolderRequest>,
+) -> Result<Json<FolderResponse>, ApiError> {
+    let name = body.name.trim();
+    if name.is_empty() {
+        return Err(ApiError::BadRequest("Folder name is required".to_string()));
+    }
+    let folder = state
+        .store
+        .find_or_create_folder_by_name(&account_id, name, false)
+        .map_err(|e| ApiError::Internal(format!("Failed to create folder: {e}")))?;
+    let folder_type = match folder.folder_type {
+        pebble_core::FolderType::Folder => "folder",
+        pebble_core::FolderType::Label => "label",
+        pebble_core::FolderType::Category => "category",
+    };
+    Ok(Json(FolderResponse {
+        id: folder.id,
+        account_id: folder.account_id,
+        name: folder.name,
+        role: folder.role.map(|role| match role {
+            pebble_core::FolderRole::Inbox => "inbox".to_string(),
+            pebble_core::FolderRole::Sent => "sent".to_string(),
+            pebble_core::FolderRole::Drafts => "drafts".to_string(),
+            pebble_core::FolderRole::Trash => "trash".to_string(),
+            pebble_core::FolderRole::Archive => "archive".to_string(),
+            pebble_core::FolderRole::Spam => "spam".to_string(),
+        }),
+        unread_count: 0,
+        folder_type: folder_type.to_string(),
+        parent_id: folder.parent_id,
+        is_system: folder.is_system,
+        sort_order: folder.sort_order,
+    }))
 }
 
 pub async fn list_folders(

@@ -1965,6 +1965,7 @@ dependencies = [
  "pebble-crypto",
  "pebble-mail",
  "pebble-oauth",
+ "pebble-rules",
  "pebble-search",
  "pebble-store",
  "pebble-translate",

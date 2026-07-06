@@ -68,6 +68,7 @@ pebble-store = { path = "crates/pebble-store" }
 pebble-search = { path = "crates/pebble-search" }
 pebble-crypto = { path = "crates/pebble-crypto" }
 pebble-mail = { path = "crates/pebble-mail" }
+pebble-rules = { path = "crates/pebble-rules" }
 pebble-translate = { path = "crates/pebble-translate" }
 pebble-oauth = { path = "crates/pebble-oauth" }
 dotenv = "0.15"
