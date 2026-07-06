@@ -12,8 +12,9 @@ fn row_to_rule(row: &rusqlite::Row) -> rusqlite::Result<Rule> {
         conditions: row.get(3)?,
         actions: row.get(4)?,
         is_enabled: is_enabled != 0,
-        created_at: row.get(6)?,
-        updated_at: row.get(7)?,
+        account_id: row.get(6)?,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
     })
 }
 
@@ -21,8 +22,8 @@ impl Store {
     pub fn insert_rule(&self, rule: &Rule) -> Result<()> {
         self.with_write(|conn| {
             conn.execute(
-                "INSERT INTO rules (id, name, priority, conditions, actions, is_enabled, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO rules (id, name, priority, conditions, actions, is_enabled, account_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     rule.id,
                     rule.name,
@@ -30,6 +31,7 @@ impl Store {
                     rule.conditions,
                     rule.actions,
                     rule.is_enabled as i32,
+                    rule.account_id,
                     rule.created_at,
                     rule.updated_at,
                 ],
@@ -41,8 +43,8 @@ impl Store {
     pub fn list_rules(&self) -> Result<Vec<Rule>> {
         self.with_read(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, priority, conditions, actions, is_enabled, created_at, updated_at
-                     FROM rules ORDER BY priority ASC",
+"SELECT id, name, priority, conditions, actions, is_enabled, account_id, created_at, updated_at
+                 FROM rules ORDER BY priority ASC",
             )?;
             let rows = stmt.query_map([], row_to_rule)?;
             let mut rules = Vec::new();
@@ -57,13 +59,14 @@ impl Store {
         self.with_write(|conn| {
             conn.execute(
                 "UPDATE rules SET name = ?1, priority = ?2, conditions = ?3, actions = ?4,
-                 is_enabled = ?5, updated_at = ?6 WHERE id = ?7",
+                 is_enabled = ?5, account_id = ?6, updated_at = ?7 WHERE id = ?8",
                 params![
                     rule.name,
                     rule.priority,
                     rule.conditions,
                     rule.actions,
                     rule.is_enabled as i32,
+                    rule.account_id,
                     rule.updated_at,
                     rule.id,
                 ],
@@ -76,6 +79,56 @@ impl Store {
         self.with_write(|conn| {
             conn.execute("DELETE FROM rules WHERE id = ?1", params![id])?;
             Ok(())
+        })
+    }
+
+    pub fn list_rules_applicable_to(&self, account_id: &str) -> Result<Vec<Rule>> {
+        self.with_read(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, name, priority, conditions, actions, is_enabled, account_id, created_at, updated_at
+                 FROM rules
+                 WHERE is_enabled = 1 AND (account_id IS NULL OR account_id = ?1)
+                 ORDER BY priority ASC",
+            )?;
+            let rows = stmt.query_map(params![account_id], row_to_rule)?;
+            let mut rules = Vec::new();
+            for row in rows {
+                rules.push(row?);
+            }
+            Ok(rules)
+        })
+    }
+
+    pub fn list_rules_for_account_only(&self, account_id: &str) -> Result<Vec<Rule>> {
+        self.with_read(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, name, priority, conditions, actions, is_enabled, account_id, created_at, updated_at
+                 FROM rules
+                 WHERE account_id = ?1
+                 ORDER BY priority ASC",
+            )?;
+            let rows = stmt.query_map(params![account_id], row_to_rule)?;
+            let mut rules = Vec::new();
+            for row in rows {
+                rules.push(row?);
+            }
+            Ok(rules)
+        })
+    }
+
+    pub fn list_all_rules(&self) -> Result<Vec<Rule>> {
+        self.with_read(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, name, priority, conditions, actions, is_enabled, account_id, created_at, updated_at
+                 FROM rules
+                 ORDER BY priority ASC",
+            )?;
+            let rows = stmt.query_map([], row_to_rule)?;
+            let mut rules = Vec::new();
+            for row in rows {
+                rules.push(row?);
+            }
+            Ok(rules)
         })
     }
 }
@@ -97,6 +150,7 @@ mod tests {
             conditions: r#"{"from": "noreply@example.com"}"#.to_string(),
             actions: r#"["archive"]"#.to_string(),
             is_enabled: true,
+            account_id: None,
             created_at: now,
             updated_at: now,
         };
@@ -115,6 +169,7 @@ mod tests {
             conditions: r#"{"subject": "URGENT"}"#.to_string(),
             actions: r#"["star"]"#.to_string(),
             is_enabled: true,
+            account_id: None,
             created_at: now,
             updated_at: now,
         };

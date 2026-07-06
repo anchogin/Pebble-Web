@@ -2,7 +2,7 @@ use pebble_core::{PebbleError, Result};
 use rusqlite::Connection;
 use std::collections::HashSet;
 
-const CURRENT_VERSION: u32 = 12;
+const CURRENT_VERSION: u32 = 13;
 const ACCOUNT_COLOR_PRESETS: [&str; 12] = [
     "#0ea5e9", "#22c55e", "#f59e0b", "#8b5cf6", "#f43f5e", "#14b8a6", "#6366f1", "#f97316",
     "#06b6d4", "#ec4899", "#84cc16", "#3b82f6",
@@ -297,9 +297,23 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
             )
             .map_err(|e| PebbleError::Storage(format!("Migration V12 failed: {e}")))?;
         }
-        set_schema_version(&tx, CURRENT_VERSION)?;
+        set_schema_version(&tx, 12)?;
         tx.commit()
             .map_err(|e| PebbleError::Storage(format!("Migration V12 commit failed: {e}")))?;
+    }
+
+    if version < 13 {
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| PebbleError::Storage(format!("Migration V13 begin failed: {e}")))?;
+        let has_account_id: bool = tx.prepare("SELECT account_id FROM rules LIMIT 0").is_ok();
+        if !has_account_id {
+            tx.execute_batch("ALTER TABLE rules ADD COLUMN account_id TEXT;")
+                .map_err(|e| PebbleError::Storage(format!("Migration V13 failed: {e}")))?;
+        }
+        set_schema_version(&tx, CURRENT_VERSION)?;
+        tx.commit()
+            .map_err(|e| PebbleError::Storage(format!("Migration V13 commit failed: {e}")))?;
     }
 
     Ok(())
@@ -431,6 +445,7 @@ CREATE TABLE IF NOT EXISTS rules (
     conditions TEXT NOT NULL DEFAULT '{}',
     actions TEXT NOT NULL DEFAULT '[]',
     is_enabled INTEGER NOT NULL DEFAULT 1,
+    account_id TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -509,5 +524,48 @@ mod tests {
             colors,
             vec![Some("#0ea5e9".to_string()), Some("#22c55e".to_string())]
         );
+    }
+
+    #[test]
+    fn migration_v13_adds_rules_account_id_and_sets_schema_version() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE accounts (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                display_name TEXT NOT NULL DEFAULT '',
+                color TEXT,
+                provider TEXT NOT NULL DEFAULT 'imap',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            CREATE TABLE rules (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                priority INTEGER NOT NULL DEFAULT 0,
+                conditions TEXT NOT NULL DEFAULT '{}',
+                actions TEXT NOT NULL DEFAULT '[]',
+                is_enabled INTEGER NOT NULL DEFAULT 1,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            INSERT INTO rules (id, name, priority, conditions, actions, is_enabled, created_at, updated_at)
+            VALUES ('r1', 'old rule', 5, '{}', '[]', 1, 1, 1);
+            PRAGMA user_version = 12;",
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        let account_id: Option<String> = conn
+            .query_row("SELECT account_id FROM rules WHERE id = 'r1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let version: u32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 13);
+        assert_eq!(account_id, None);
     }
 }

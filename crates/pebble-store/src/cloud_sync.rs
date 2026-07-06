@@ -451,6 +451,7 @@ mod tests {
             conditions: r#"{"from":"noreply@example.com"}"#.to_string(),
             actions: r#"["archive"]"#.to_string(),
             is_enabled: true,
+            account_id: None,
             created_at: now,
             updated_at: now,
         };
@@ -659,6 +660,7 @@ mod tests {
             conditions: "{}".to_string(),
             actions: "[]".to_string(),
             is_enabled: true,
+            account_id: None,
             created_at: now,
             updated_at: now,
         };
@@ -676,6 +678,7 @@ mod tests {
                 conditions: "{}".to_string(),
                 actions: "[]".to_string(),
                 is_enabled: false,
+                account_id: None,
                 created_at: now,
                 updated_at: now,
             }],

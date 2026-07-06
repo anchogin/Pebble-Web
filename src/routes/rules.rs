@@ -49,6 +49,7 @@ pub async fn create_rule(
         conditions: body.conditions,
         actions: body.actions,
         is_enabled: body.is_enabled.unwrap_or(true),
+        account_id: None,
         created_at: now,
         updated_at: now,
     };
@@ -82,6 +83,7 @@ pub async fn update_rule(
             conditions: body.conditions,
             actions: body.actions,
             is_enabled: body.is_enabled,
+            account_id: None,
             created_at: existing.created_at,
             updated_at: now_timestamp(),
         })

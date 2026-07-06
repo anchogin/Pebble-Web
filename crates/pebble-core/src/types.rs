@@ -210,6 +210,8 @@ pub struct Rule {
     pub conditions: String,
     pub actions: String,
     pub is_enabled: bool,
+    #[serde(default)]
+    pub account_id: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
