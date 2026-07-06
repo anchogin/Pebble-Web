@@ -11,6 +11,7 @@ pub mod messages;
 pub mod migrations;
 pub mod pending_ops;
 pub mod rules;
+pub mod rules_bridge;
 pub mod search_pending;
 pub mod secure_user_data;
 pub mod snooze;

@@ -992,6 +992,46 @@ impl Store {
         })
     }
 
+    /// Rule-eligible message ids across all accounts: excludes soft-deleted
+    /// rows plus messages whose only folder is `spam` or `drafts`. Used by
+    /// the rules engine for the manual "execute all" batch run.
+    pub fn list_message_ids_for_rules(&self) -> Result<Vec<String>> {
+        self.with_read(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT m.id FROM messages m
+                 LEFT JOIN message_folders mf ON mf.message_id = m.id
+                 LEFT JOIN folders f ON mf.folder_id = f.id
+                 WHERE m.is_deleted = 0
+                   AND (f.role IS NULL OR (f.role != 'spam' AND f.role != 'drafts'))",
+            )?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+            let mut ids = Vec::new();
+            for row in rows {
+                ids.push(row?);
+            }
+            Ok(ids)
+        })
+    }
+
+    /// Same as `list_message_ids_for_rules` but scoped to one account.
+    pub fn list_message_ids_for_account(&self, account_id: &str) -> Result<Vec<String>> {
+        self.with_read(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT m.id FROM messages m
+                 LEFT JOIN message_folders mf ON mf.message_id = m.id
+                 LEFT JOIN folders f ON mf.folder_id = f.id
+                 WHERE m.is_deleted = 0 AND m.account_id = ?1
+                   AND (f.role IS NULL OR (f.role != 'spam' AND f.role != 'drafts'))",
+            )?;
+            let rows = stmt.query_map(params![account_id], |row| row.get::<_, String>(0))?;
+            let mut ids = Vec::new();
+            for row in rows {
+                ids.push(row?);
+            }
+            Ok(ids)
+        })
+    }
+
     /// List all messages in a thread, ordered chronologically.
     pub fn list_messages_by_thread(&self, thread_id: &str) -> Result<Vec<Message>> {
         self.with_read(|conn| {

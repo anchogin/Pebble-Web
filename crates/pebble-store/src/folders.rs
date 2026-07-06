@@ -132,6 +132,44 @@ impl Store {
         Ok(folders.into_iter().find(|f| f.name.to_lowercase() == lower))
     }
 
+    /// Idempotent: return the existing folder whose name matches (case-insensitive)
+    /// the given `name` within `account_id`; otherwise insert a new local-only folder
+    /// of type `Folder`. When `is_system && name.eq_ignore_ascii_case("Archive")`,
+    /// the new folder gets `role = Some(Archive)` and `sort_order = 0` so it
+    /// surfaces as the account's Archive folder.
+    pub fn find_or_create_folder_by_name(
+        &self,
+        account_id: &str,
+        name: &str,
+        is_system: bool,
+    ) -> Result<Folder> {
+        if let Some(existing) = self.find_folder_by_name(account_id, name)? {
+            return Ok(existing);
+        }
+        let id = pebble_core::new_id();
+        // Archive is the only system role the engine auto-creates; assign it
+        // the matching role + sort_order so subsequent role lookups find it.
+        let (role, sort_order) = if is_system && name.eq_ignore_ascii_case("Archive") {
+            (Some(FolderRole::Archive), 0)
+        } else {
+            (None, 1000)
+        };
+        let folder = Folder {
+            id: id.clone(),
+            account_id: account_id.into(),
+            remote_id: format!("local-{}", name),
+            name: name.into(),
+            folder_type: FolderType::Folder,
+            role,
+            parent_id: None,
+            color: None,
+            is_system,
+            sort_order,
+        };
+        self.insert_folder(&folder)?;
+        Ok(folder)
+    }
+
     pub fn delete_folder_by_remote_id(&self, account_id: &str, remote_id: &str) -> Result<()> {
         self.with_write(|conn| {
             conn.execute(
