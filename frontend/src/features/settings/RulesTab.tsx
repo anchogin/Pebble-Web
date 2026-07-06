@@ -1,8 +1,23 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Plus, Pencil, Trash2, ShieldCheck, X } from "lucide-react";
-import { createRule, deleteRule, listRules, updateRule, type Rule } from "@/lib/api";
+import { CirclePlus, Play, Plus, Pencil, Trash2, ShieldCheck, X } from "lucide-react";
+import { useAccountsQuery } from "@/hooks/queries";
+import {
+  createFolder,
+  createLabel,
+  createRule,
+  deleteRule,
+  executeRule,
+  listFolders,
+  listLabels,
+  listRules,
+  updateRule,
+  type Folder,
+  type Label,
+  type Rule,
+} from "@/lib/api";
 import ConfirmDialog from "@/components/ConfirmDialog";
+import RulesProgressDialog from "@/components/RulesProgressDialog";
 import { useToastStore } from "@/stores/toast.store";
 import { useUIStore } from "@/stores/ui.store";
 import { extractErrorMessage } from "@/lib/extractErrorMessage";
@@ -58,6 +73,7 @@ interface RuleFormData {
   name: string;
   priority: number;
   is_enabled: boolean;
+  account_id: string | null;
   conditions: Condition[];
   actions: RuleAction[];
 }
@@ -66,6 +82,7 @@ const emptyForm: RuleFormData = {
   name: "",
   priority: 0,
   is_enabled: true,
+  account_id: null,
   conditions: [{ field: "from", op: "contains", value: "" }],
   actions: [{ type: "Archive" }],
 };
@@ -76,6 +93,7 @@ function buildRuleFormFromSelection(text: string, name: string): RuleFormData {
     name,
     priority: 0,
     is_enabled: true,
+    account_id: null,
     conditions: [{ field: "body", op: "contains", value }],
     actions: [{ type: "Archive" }],
   };
@@ -83,12 +101,17 @@ function buildRuleFormFromSelection(text: string, name: string): RuleFormData {
 
 export default function RulesTab() {
   const { t } = useTranslation();
+  const { data: accounts = [] } = useAccountsQuery();
   const addToast = useToastStore((s) => s.addToast);
   const pendingRuleDraftText = useUIStore((s) => s.pendingRuleDraftText);
   const setPendingRuleDraftText = useUIStore((s) => s.setPendingRuleDraftText);
   const [rules, setRules] = useState<Rule[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<RuleFormData>(emptyForm);
+  const [labels, setLabels] = useState<Label[]>([]);
+  const [folders, setFolders] = useState<Folder[]>([]);
+  const [creatingAction, setCreatingAction] = useState<{ index: number; kind: "label" | "folder"; value: string } | null>(null);
+  const [execDialog, setExecDialog] = useState<{ ruleId: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
@@ -107,6 +130,28 @@ export default function RulesTab() {
   useEffect(() => {
     fetchRules();
   }, []);
+
+  useEffect(() => {
+    listLabels()
+      .then(setLabels)
+      .catch((err) => {
+        console.error("Failed to fetch labels:", err);
+      });
+  }, []);
+
+  useEffect(() => {
+    if (!form.account_id) {
+      setFolders([]);
+      return;
+    }
+
+    listFolders(form.account_id)
+      .then(setFolders)
+      .catch((err) => {
+        console.error("Failed to fetch folders:", err);
+        setFolders([]);
+      });
+  }, [form.account_id]);
 
   useEffect(() => {
     if (!pendingRuleDraftText) return;
@@ -131,6 +176,7 @@ export default function RulesTab() {
       name: rule.name,
       priority: rule.priority,
       is_enabled: rule.is_enabled,
+      account_id: rule.account_id ?? null,
       conditions: parseConditions(rule.conditions),
       actions: parseActions(rule.actions),
     });
@@ -140,40 +186,98 @@ export default function RulesTab() {
   function cancelEdit() {
     setEditingId(null);
     setForm(emptyForm);
+    setCreatingAction(null);
     setError(null);
   }
 
-  async function handleSave() {
+  async function handleSave(): Promise<Rule | null> {
     if (!form.name.trim()) {
       setError(t("rules.nameRequired"));
-      return;
+      return null;
     }
     if (form.conditions.some((c) => !c.value.trim())) {
       setError(t("rules.conditionValueRequired", "Condition values cannot be empty."));
-      return;
+      return null;
     }
 
     const conditionsJson = serializeConditions(form.conditions);
     const actionsJson = serializeActions(form.actions);
 
     try {
+      let savedRule: Rule | null = null;
       if (editingId === "__new__") {
-        await createRule(form.name, form.priority, conditionsJson, actionsJson);
+        savedRule = await createRule(form.name, form.priority, conditionsJson, actionsJson, form.account_id);
       } else if (editingId) {
         const existing = rules.find((r) => r.id === editingId);
         if (existing) {
-          await updateRule({
+          savedRule = {
             ...existing,
             name: form.name,
             priority: form.priority,
             is_enabled: form.is_enabled,
+            account_id: form.account_id,
             conditions: conditionsJson,
             actions: actionsJson,
+          };
+          await updateRule({
+            ...savedRule,
           });
         }
       }
       cancelEdit();
       await fetchRules();
+      return savedRule;
+    } catch (err) {
+      setError(String(err));
+      return null;
+    }
+  }
+
+  async function handleExecute(ruleId: string) {
+    setExecDialog({ ruleId });
+    try {
+      await executeRule(ruleId);
+      addToast({ message: t("rules.executeStarted", "规则执行中..."), type: "info" });
+    } catch (err) {
+      setExecDialog(null);
+      addToast({ message: t("rules.executeFailed", "执行失败"), type: "error" });
+      console.error("Failed to execute rule:", err);
+    }
+  }
+
+  async function handleSaveAndExecute() {
+    const savedRule = await handleSave();
+    if (!savedRule) return;
+    await handleExecute(savedRule.id);
+  }
+
+  async function createActionOption() {
+    if (!creatingAction) return;
+
+    const name = creatingAction.value.trim();
+    if (!name) {
+      setError(
+        creatingAction.kind === "label"
+          ? t("rules.labelPlaceholder", "Label name")
+          : t("rules.folderPlaceholder", "Folder name"),
+      );
+      return;
+    }
+
+    try {
+      if (creatingAction.kind === "label") {
+        await createLabel(name);
+        setLabels(await listLabels());
+      } else if (form.account_id) {
+        await createFolder(form.account_id, name);
+        setFolders(await listFolders(form.account_id));
+      } else {
+        setError(t("rules.selectAccountFirst", "先选账户才能选文件夹"));
+        return;
+      }
+      updateAction(creatingAction.index, { value: name });
+      setCreatingAction(null);
+      setError(null);
     } catch (err) {
       setError(String(err));
     }
@@ -319,59 +423,153 @@ export default function RulesTab() {
   // ── Action row renderer ─────────────────────────────────────
   function renderActionRow(action: RuleAction, index: number) {
     const needsValue = action.type === "AddLabel" || action.type === "MoveToFolder" || action.type === "SetKanbanColumn";
+    const isCreatingThisAction = creatingAction?.index === index;
 
     return (
-      <div key={index} style={{ display: "flex", gap: "6px", alignItems: "center" }}>
-        <select
-          aria-label={t("rules.actionType", "Action type")}
-          value={action.type}
-          onChange={(e) => {
-            const newType = e.target.value as ActionType;
-            const val = newType === "SetKanbanColumn" ? "todo" : "";
-            updateAction(index, { type: newType, value: val });
-          }}
-          style={{ ...selectStyle, flex: "0 0 160px" }}
-        >
-          {ACTION_TYPES.map((at) => (
-            <option key={at} value={at}>{t(`rules.action_${at}`, at)}</option>
-          ))}
-        </select>
-        {needsValue && (
-          action.type === "SetKanbanColumn" ? (
-            <select
-              aria-label={t("rules.kanbanColumn", "Kanban column")}
-              value={action.value || "todo"}
-              onChange={(e) => updateAction(index, { value: e.target.value })}
-              style={{ ...selectStyle, flex: 1 }}
-            >
-              {KANBAN_COLUMNS.map((c) => (
-                <option key={c} value={c}>{t(`rules.kanban_${c}`, c)}</option>
-              ))}
-            </select>
-          ) : (
+      <div key={index}>
+        <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+          <select
+            aria-label={t("rules.actionType", "Action type")}
+            value={action.type}
+            onChange={(e) => {
+              const newType = e.target.value as ActionType;
+              const val = newType === "SetKanbanColumn" ? "todo" : "";
+              updateAction(index, { type: newType, value: val });
+              setCreatingAction((current) => (current?.index === index ? null : current));
+            }}
+            style={{ ...selectStyle, flex: "0 0 160px" }}
+          >
+            {ACTION_TYPES.map((at) => (
+              <option key={at} value={at}>{t(`rules.action_${at}`, at)}</option>
+            ))}
+          </select>
+          {needsValue && (
+            action.type === "SetKanbanColumn" ? (
+              <select
+                aria-label={t("rules.kanbanColumn", "Kanban column")}
+                value={action.value || "todo"}
+                onChange={(e) => updateAction(index, { value: e.target.value })}
+                style={{ ...selectStyle, flex: 1 }}
+              >
+                {KANBAN_COLUMNS.map((c) => (
+                  <option key={c} value={c}>{t(`rules.kanban_${c}`, c)}</option>
+                ))}
+              </select>
+            ) : action.type === "MoveToFolder" && !form.account_id ? (
+              <input
+                type="text"
+                disabled
+                aria-label={t("rules.actionValue", "Action value")}
+                placeholder={t("rules.selectAccountFirst", "先选账户才能选文件夹")}
+                style={{ ...inputStyle, flex: 1, opacity: 0.6, cursor: "not-allowed" }}
+              />
+            ) : (
+              <>
+                <input
+                  type="text"
+                  list={action.type === "AddLabel" ? "rule-label-options" : "rule-folder-options"}
+                  aria-label={t("rules.actionValue", "Action value")}
+                  value={action.value || ""}
+                  onChange={(e) => updateAction(index, { value: e.target.value })}
+                  placeholder={
+                    action.type === "AddLabel"
+                      ? t("rules.labelPlaceholder", "Label name")
+                      : t("rules.folderPlaceholder", "Folder name")
+                  }
+                  style={{ ...inputStyle, flex: 1 }}
+                />
+                <datalist id={action.type === "AddLabel" ? "rule-label-options" : "rule-folder-options"}>
+                  {(action.type === "AddLabel" ? labels.map((label) => label.name) : folders.map((folder) => folder.name)).map((name) => (
+                    <option key={name} value={name} />
+                  ))}
+                </datalist>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const value = action.value?.trim() || "";
+                    if (!value) {
+                      setError(
+                        action.type === "AddLabel"
+                          ? t("rules.labelPlaceholder", "Label name")
+                          : t("rules.folderPlaceholder", "Folder name"),
+                      );
+                      return;
+                    }
+                    setCreatingAction({
+                      index,
+                      kind: action.type === "AddLabel" ? "label" : "folder",
+                      value,
+                    });
+                  }}
+                  style={{
+                    ...smallBtnStyle,
+                    gap: "4px",
+                    padding: "4px 6px",
+                    fontSize: "12px",
+                  }}
+                  title={t("rules.createInline", "新建")}
+                >
+                  <CirclePlus size={13} aria-hidden="true" />
+                  {t("rules.createInline", "新建")}
+                </button>
+              </>
+            )
+          )}
+          {!needsValue && <div style={{ flex: 1 }} />}
+          <button
+            onClick={() => removeAction(index)}
+            style={smallBtnStyle}
+            title={t("common.remove", "Remove")}
+            disabled={form.actions.length <= 1}
+          >
+            <X size={14} />
+          </button>
+        </div>
+        {isCreatingThisAction && (
+          <div style={{ display: "flex", gap: "6px", alignItems: "center", marginTop: "4px", paddingLeft: "166px" }}>
             <input
               type="text"
-              aria-label={t("rules.actionValue", "Action value")}
-              value={action.value || ""}
-              onChange={(e) => updateAction(index, { value: e.target.value })}
+              value={creatingAction.value}
+              onChange={(e) => setCreatingAction({ ...creatingAction, value: e.target.value })}
               placeholder={
-                action.type === "AddLabel"
-                  ? t("rules.labelPlaceholder", "Label name")
-                  : t("rules.folderPlaceholder", "Folder name")
+                creatingAction.kind === "label"
+                  ? t("rules.createLabelInline", "新建标签")
+                  : t("rules.createFolderInline", "新建文件夹")
               }
               style={{ ...inputStyle, flex: 1 }}
             />
-          )
+            <button
+              type="button"
+              onClick={createActionOption}
+              style={{
+                padding: "6px 12px",
+                borderRadius: "6px",
+                border: "none",
+                backgroundColor: "var(--color-accent)",
+                color: "#fff",
+                fontSize: "12px",
+                cursor: "pointer",
+              }}
+            >
+              {t("common.confirm")}
+            </button>
+            <button
+              type="button"
+              onClick={() => setCreatingAction(null)}
+              style={{
+                padding: "6px 12px",
+                borderRadius: "6px",
+                border: "1px solid var(--color-border)",
+                backgroundColor: "transparent",
+                color: "var(--color-text-primary)",
+                fontSize: "12px",
+                cursor: "pointer",
+              }}
+            >
+              {t("common.cancel")}
+            </button>
+          </div>
         )}
-        {!needsValue && <div style={{ flex: 1 }} />}
-        <button
-          onClick={() => removeAction(index)}
-          style={smallBtnStyle}
-          title={t("common.remove", "Remove")}
-          disabled={form.actions.length <= 1}
-        >
-          <X size={14} />
-        </button>
       </div>
     );
   }
@@ -391,6 +589,21 @@ export default function RulesTab() {
           gap: "14px",
         }}
       >
+        <div>
+          <label htmlFor="rule-account" style={labelStyle}>{t("rules.account", "适用账户")}</label>
+          <select
+            id="rule-account"
+            value={form.account_id ?? ""}
+            onChange={(e) => setForm({ ...form, account_id: e.target.value || null })}
+            style={selectStyle}
+          >
+            <option value="">{t("rules.allAccounts", "全部账户(全局)")}</option>
+            {accounts.map((account) => (
+              <option key={account.id} value={account.id}>{account.email}</option>
+            ))}
+          </select>
+        </div>
+
         {/* Name */}
         <div>
           <label htmlFor="rule-name" style={labelStyle}>{t("rules.name")}</label>
@@ -520,6 +733,21 @@ export default function RulesTab() {
             }}
           >
             {t("common.save")}
+          </button>
+          <button
+            onClick={handleSaveAndExecute}
+            style={{
+              padding: "7px 14px",
+              borderRadius: "6px",
+              border: "none",
+              backgroundColor: "var(--color-accent)",
+              color: "#fff",
+              fontSize: "13px",
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            {t("rules.saveAndExecute", "保存并执行")}
           </button>
         </div>
       </div>
@@ -722,6 +950,34 @@ export default function RulesTab() {
                       <Pencil size={15} />
                     </button>
                     <button
+                      onClick={() => handleExecute(rule.id)}
+                      disabled={editingId !== null}
+                      aria-label={t("rules.executeRule", "执行规则")}
+                      title={t("rules.executeRule", "执行规则")}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        padding: "6px",
+                        borderRadius: "6px",
+                        border: "none",
+                        backgroundColor: "transparent",
+                        color: editingId !== null ? "var(--color-border)" : "var(--color-text-secondary)",
+                        cursor: editingId !== null ? "not-allowed" : "pointer",
+                      }}
+                      onMouseEnter={(e) => {
+                        if (editingId === null) {
+                          e.currentTarget.style.color = "var(--color-accent)";
+                          e.currentTarget.style.backgroundColor = "var(--color-bg-hover)";
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.color = editingId !== null ? "var(--color-border)" : "var(--color-text-secondary)";
+                        e.currentTarget.style.backgroundColor = "transparent";
+                      }}
+                    >
+                      <Play size={15} />
+                    </button>
+                    <button
                       onClick={() => setDeleteTarget({ id: rule.id, name: rule.name })}
                       aria-label={t("rules.deleteRule")}
                       title={t("rules.deleteRule")}
@@ -765,6 +1021,12 @@ export default function RulesTab() {
             doDelete(deleteTarget.id);
             setDeleteTarget(null);
           }}
+        />
+      )}
+      {execDialog && (
+        <RulesProgressDialog
+          ruleId={execDialog.ruleId}
+          onClose={() => setExecDialog(null)}
         />
       )}
     </div>
