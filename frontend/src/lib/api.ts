@@ -263,6 +263,11 @@ export async function listFolders(accountId: string): Promise<Folder[]> {
   return res.data;
 }
 
+export async function createFolder(accountId: string, name: string): Promise<Folder> {
+  const res = await api.post<Folder>(`/accounts/${accountId}/folders`, { name });
+  return res.data;
+}
+
 // ─── Message API ─────────────────────────────────────────────────────────────
 
 export async function listMessages(
@@ -544,13 +549,20 @@ export async function listSnoozed(): Promise<SnoozedMessage[]> {
 
 // ─── Rules API ───────────────────────────────────────────────────────────────
 
-export async function createRule(name: string, priority: number, conditions: string, actions: string): Promise<Rule> {
+export async function createRule(
+  name: string,
+  priority: number,
+  conditions: string,
+  actions: string,
+  accountId?: string | null,
+): Promise<Rule> {
   const res = await api.post<Rule>("/rules", {
     name,
     priority,
     conditions,
     actions,
     is_enabled: true,
+    account_id: accountId ?? null,
   });
   return res.data;
 }
@@ -567,11 +579,28 @@ export async function updateRule(rule: Rule): Promise<void> {
     conditions: rule.conditions,
     actions: rule.actions,
     is_enabled: rule.is_enabled,
+    account_id: rule.account_id ?? null,
   });
 }
 
 export async function deleteRule(ruleId: string): Promise<void> {
   await api.delete(`/rules/${ruleId}`);
+}
+
+export async function executeRule(
+  ruleId: string,
+): Promise<{ ok: boolean; message: string }> {
+  const res = await api.post<{ ok: boolean; message: string }>(
+    `/rules/${ruleId}/execute`,
+  );
+  return res.data;
+}
+
+export async function executeAllRules(): Promise<{ ok: boolean; message: string }> {
+  const res = await api.post<{ ok: boolean; message: string }>(
+    "/rules/execute-all",
+  );
+  return res.data;
 }
 
 // ─── Compose API ─────────────────────────────────────────────────────────────

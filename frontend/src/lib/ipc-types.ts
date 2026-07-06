@@ -291,6 +291,7 @@ export interface Rule {
   conditions: string;
   actions: string;
   is_enabled: boolean;
+  account_id?: string | null;
   created_at: number;
   updated_at: number;
 }
