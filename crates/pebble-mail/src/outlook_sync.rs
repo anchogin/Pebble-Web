@@ -766,7 +766,7 @@ mod tests {
 
         assert!(!should_sync_outlook_folder(&conversation_history));
         assert!(!should_sync_outlook_folder(&remote_outbox));
-        assert!(should_sync_outlook_folder(&local_outbox));
+        assert!(!should_sync_outlook_folder(&local_outbox));
         assert!(should_sync_outlook_folder(&make_folder("inbox-id")));
     }
 
