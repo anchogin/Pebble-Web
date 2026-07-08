@@ -56,13 +56,23 @@ fn schema_needs_rebuild(existing_schema: &Schema) -> bool {
         )
 }
 
+fn truncate_snippet(body: &str) -> String {
+    if body.len() <= SNIPPET_MAX_LEN {
+        return body.to_string();
+    }
+
+    let boundary = body
+        .char_indices()
+        .map(|(index, _)| index)
+        .take_while(|index| *index <= SNIPPET_MAX_LEN)
+        .last()
+        .unwrap_or(0);
+    format!("{}…", &body[..boundary])
+}
+
 fn make_snippet(doc: &TantivyDocument, field: tantivy::schema::Field) -> String {
     let body = doc.get_first(field).and_then(|v| v.as_str()).unwrap_or("");
-    if body.len() > SNIPPET_MAX_LEN {
-        format!("{}…", &body[..body.floor_char_boundary(SNIPPET_MAX_LEN)])
-    } else {
-        body.to_string()
-    }
+    truncate_snippet(body)
 }
 
 pub struct AdvancedSearchParams<'a> {
@@ -616,6 +626,15 @@ mod tests {
             created_at: 1_700_000_000,
             updated_at: 1_700_000_000,
         }
+    }
+
+    #[test]
+    fn test_truncate_snippet_respects_utf8_boundary() {
+        let body = format!("{}你", "a".repeat(SNIPPET_MAX_LEN - 1));
+
+        let snippet = truncate_snippet(&body);
+
+        assert_eq!(snippet, format!("{}…", "a".repeat(SNIPPET_MAX_LEN - 1)));
     }
 
     #[test]
