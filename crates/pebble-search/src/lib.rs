@@ -77,6 +77,16 @@ pub struct AdvancedSearchParams<'a> {
     pub limit: usize,
 }
 
+const TANTIVY_SAFE_MIN_TIMESTAMP_SECS: i64 = i64::MIN / 1_000_000_000;
+const TANTIVY_SAFE_MAX_TIMESTAMP_SECS: i64 = i64::MAX / 1_000_000_000;
+
+fn safe_datetime_from_timestamp_secs(timestamp: i64) -> DateTime {
+    DateTime::from_timestamp_secs(timestamp.clamp(
+        TANTIVY_SAFE_MIN_TIMESTAMP_SECS,
+        TANTIVY_SAFE_MAX_TIMESTAMP_SECS,
+    ))
+}
+
 pub struct TantivySearch {
     index: Index,
     writer: Mutex<IndexWriter>,
@@ -203,7 +213,7 @@ impl TantivySearch {
             .collect();
         doc.add_text(ss.to_addresses, to_text.join(" "));
 
-        doc.add_date(ss.date, DateTime::from_timestamp_secs(msg.date));
+        doc.add_date(ss.date, safe_datetime_from_timestamp_secs(msg.date));
 
         for fid in folder_ids {
             doc.add_text(ss.folder_id, fid);
@@ -253,7 +263,7 @@ impl TantivySearch {
                 })
                 .collect();
             doc.add_text(ss.to_addresses, to_text.join(" "));
-            doc.add_date(ss.date, DateTime::from_timestamp_secs(msg.date));
+            doc.add_date(ss.date, safe_datetime_from_timestamp_secs(msg.date));
             for fid in folder_ids {
                 doc.add_text(ss.folder_id, fid);
             }
@@ -322,7 +332,13 @@ impl TantivySearch {
 
         let query_parser = QueryParser::for_index(
             &self.index,
-            vec![ss.subject, ss.body_text, ss.from_address, ss.from_name],
+            vec![
+                ss.subject,
+                ss.body_text,
+                ss.from_address,
+                ss.from_name,
+                ss.to_addresses,
+            ],
         );
 
         let query = query_parser
@@ -434,11 +450,13 @@ impl TantivySearch {
         // Date range filter
         if date_from.is_some() || date_to.is_some() {
             let lower = date_from
-                .map(DateTime::from_timestamp_secs)
-                .unwrap_or(DateTime::from_timestamp_secs(0));
+                .map(safe_datetime_from_timestamp_secs)
+                .unwrap_or_else(|| safe_datetime_from_timestamp_secs(0));
             let upper = date_to
-                .map(DateTime::from_timestamp_secs)
-                .unwrap_or(DateTime::from_timestamp_secs(i64::MAX / 1_000_000)); // far future
+                .map(safe_datetime_from_timestamp_secs)
+                .unwrap_or_else(|| {
+                    safe_datetime_from_timestamp_secs(TANTIVY_SAFE_MAX_TIMESTAMP_SECS)
+                });
 
             let range_query = RangeQuery::new_date_bounds(
                 "date".to_string(),
@@ -648,6 +666,76 @@ mod tests {
             .unwrap();
         assert_eq!(subject_hits.len(), 1);
         assert_eq!(subject_hits[0].message_id, "msg-case-subject");
+    }
+
+    #[test]
+    fn test_advanced_search_date_from_without_date_to_does_not_panic() {
+        let engine = TantivySearch::open_in_memory().unwrap();
+        let msg = make_test_message(
+            "msg-date-open-ended",
+            "Date search",
+            "Search by date",
+            "date@example.com",
+        );
+        engine.index_message(&msg, &["inbox".to_string()]).unwrap();
+        engine.commit().unwrap();
+
+        let hits = engine
+            .advanced_search(AdvancedSearchParams {
+                text: None,
+                from: None,
+                to: None,
+                subject: None,
+                date_from: Some(1_600_000_000),
+                date_to: None,
+                has_attachment: None,
+                folder_id: None,
+                limit: 10,
+            })
+            .unwrap();
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].message_id, "msg-date-open-ended");
+    }
+
+    #[test]
+    fn test_advanced_search_large_date_bound_does_not_panic() {
+        let engine = TantivySearch::open_in_memory().unwrap();
+
+        let hits = engine
+            .advanced_search(AdvancedSearchParams {
+                text: None,
+                from: None,
+                to: None,
+                subject: None,
+                date_from: Some(i64::MAX),
+                date_to: Some(i64::MAX),
+                has_attachment: None,
+                folder_id: None,
+                limit: 10,
+            })
+            .unwrap();
+
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn test_index_message_large_date_does_not_panic() {
+        let engine = TantivySearch::open_in_memory().unwrap();
+        let mut msg = make_test_message(
+            "msg-large-date",
+            "Large date",
+            "Large date body",
+            "date@example.com",
+        );
+        msg.date = i64::MAX;
+
+        engine.index_message(&msg, &["inbox".to_string()]).unwrap();
+        engine.commit().unwrap();
+
+        let hits = engine.search("Large date", 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].message_id, "msg-large-date");
     }
 
     #[test]
@@ -973,5 +1061,46 @@ mod tests {
             "expected CC recipient to be searchable via to filter"
         );
         assert_eq!(hits[0].message_id, "msg-cc");
+    }
+
+    #[test]
+    fn test_simple_search_finds_recipients() {
+        let engine = TantivySearch::open_in_memory().unwrap();
+        let mut msg = make_test_message(
+            "msg-recipient-wide",
+            "Ordinary status",
+            "No matching body token",
+            "sender@example.com",
+        );
+        msg.to_list = vec![EmailAddress {
+            name: Some("你好收件人".to_string()),
+            address: "hello@example.com".to_string(),
+        }];
+        msg.cc_list = vec![EmailAddress {
+            name: Some("Copy Target".to_string()),
+            address: "copy@example.com".to_string(),
+        }];
+        msg.bcc_list = vec![EmailAddress {
+            name: Some("Blind Target".to_string()),
+            address: "blind@example.com".to_string(),
+        }];
+        engine.index_message(&msg, &["inbox".to_string()]).unwrap();
+        engine.commit().unwrap();
+
+        let cjk_hits = engine.search("你好", 10).unwrap();
+        assert_eq!(
+            cjk_hits.len(),
+            1,
+            "expected simple search to match recipient display names"
+        );
+        assert_eq!(cjk_hits[0].message_id, "msg-recipient-wide");
+
+        let bcc_hits = engine.search("blind", 10).unwrap();
+        assert_eq!(
+            bcc_hits.len(),
+            1,
+            "expected simple search to match bcc recipients"
+        );
+        assert_eq!(bcc_hits[0].message_id, "msg-recipient-wide");
     }
 }

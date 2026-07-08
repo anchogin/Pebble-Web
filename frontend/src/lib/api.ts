@@ -268,16 +268,35 @@ export async function createFolder(accountId: string, name: string): Promise<Fol
   return res.data;
 }
 
+export async function renameFolder(folderId: string, name: string): Promise<Folder> {
+  const res = await api.put<Folder>(`/folders/${folderId}`, { name });
+  return res.data;
+}
+
+export async function deleteFolder(folderId: string): Promise<void> {
+  await api.delete(`/folders/${folderId}`);
+}
+
+export async function linkFolder(folderId: string): Promise<Folder> {
+  const res = await api.post<Folder>(`/folders/${folderId}/link`);
+  return res.data;
+}
+
+export async function unlinkFolder(folderId: string): Promise<Folder> {
+  const res = await api.post<Folder>(`/folders/${folderId}/unlink`);
+  return res.data;
+}
+
 // ─── Message API ─────────────────────────────────────────────────────────────
 
 export async function listMessages(
   folderId: string,
   limit: number,
   offset: number,
-  _folderIds?: string[],
+  folderIds?: string[],
 ): Promise<MessageSummary[]> {
   const res = await api.get<MessageSummary[]>(`/folders/${folderId}/messages`, {
-    params: { limit, offset },
+    params: { limit, offset, folderIds: folderIds?.join(",") },
   });
   return res.data;
 }
@@ -589,16 +608,32 @@ export async function deleteRule(ruleId: string): Promise<void> {
 
 export async function executeRule(
   ruleId: string,
-): Promise<{ ok: boolean; message: string }> {
-  const res = await api.post<{ ok: boolean; message: string }>(
-    `/rules/${ruleId}/execute`,
+  runId?: string,
+): Promise<{ ok: boolean; message: string; run_id?: string }> {
+  const query = runId ? `?run_id=${encodeURIComponent(runId)}` : "";
+  const res = await api.post<{ ok: boolean; message: string; run_id?: string }>(
+    `/rules/${ruleId}/execute${query}`,
   );
   return res.data;
 }
 
-export async function executeAllRules(): Promise<{ ok: boolean; message: string }> {
-  const res = await api.post<{ ok: boolean; message: string }>(
+export async function cancelRuleRun(ruleId: string, runId: string): Promise<{ ok: boolean }> {
+  const res = await api.post<{ ok: boolean }>(
+    `/rules/${ruleId}/cancel?run_id=${encodeURIComponent(runId)}`,
+  );
+  return res.data;
+}
+
+export async function executeAllRules(): Promise<{ ok: boolean; message: string; run_id?: string }> {
+  const res = await api.post<{ ok: boolean; message: string; run_id?: string }>(
     "/rules/execute-all",
+  );
+  return res.data;
+}
+
+export async function cancelAllRulesRun(runId: string): Promise<{ ok: boolean }> {
+  const res = await api.post<{ ok: boolean }>(
+    `/rules/execute-all/cancel?run_id=${encodeURIComponent(runId)}`,
   );
   return res.data;
 }
@@ -691,10 +726,10 @@ export async function listThreads(
   folderId: string,
   limit: number,
   offset: number,
-  _folderIds?: string[],
+  folderIds?: string[],
 ): Promise<ThreadSummary[]> {
   const res = await api.get<ThreadSummary[]>(`/folders/${folderId}/threads`, {
-    params: { limit, offset },
+    params: { limit, offset, folderIds: folderIds?.join(",") },
   });
   return res.data;
 }

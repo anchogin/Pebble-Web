@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CirclePlus, Play, Plus, Pencil, Trash2, ShieldCheck, X } from "lucide-react";
 import { useAccountsQuery } from "@/hooks/queries";
@@ -111,7 +111,8 @@ export default function RulesTab() {
   const [labels, setLabels] = useState<Label[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [creatingAction, setCreatingAction] = useState<{ index: number; kind: "label" | "folder"; value: string } | null>(null);
-  const [execDialog, setExecDialog] = useState<{ ruleId: string | null } | null>(null);
+  const [execDialog, setExecDialog] = useState<{ ruleId: string | null; runId: string; ruleName: string } | null>(null);
+  const pendingExecutionsRef = useRef<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
@@ -233,22 +234,37 @@ export default function RulesTab() {
     }
   }
 
-  async function handleExecute(ruleId: string) {
-    setExecDialog({ ruleId });
-    try {
-      await executeRule(ruleId);
-      addToast({ message: t("rules.executeStarted", "规则执行中..."), type: "info" });
-    } catch (err) {
-      setExecDialog(null);
-      addToast({ message: t("rules.executeFailed", "执行失败"), type: "error" });
-      console.error("Failed to execute rule:", err);
-    }
+  async function handleExecute(ruleId: string, ruleNameOverride?: string) {
+    const runId = crypto.randomUUID();
+    const ruleName = ruleNameOverride ?? rules.find((rule) => rule.id === ruleId)?.name ?? form.name ?? ruleId;
+    console.log(`[执行规则]${ruleName}:打开执行弹窗`, { ruleId, runId });
+    pendingExecutionsRef.current.delete(runId);
+    setExecDialog({ ruleId, runId, ruleName });
   }
+
+  const handleProgressDialogReady = useCallback((ruleId: string | null, runId: string) => {
+    if (!ruleId || pendingExecutionsRef.current.has(runId)) return;
+    const ruleName = execDialog?.ruleName ?? rules.find((rule) => rule.id === ruleId)?.name ?? ruleId;
+    console.log(`[执行规则]${ruleName}:进度弹窗已就绪,开始调用执行接口`, { ruleId, runId });
+    pendingExecutionsRef.current.add(runId);
+
+    void executeRule(ruleId, runId)
+      .then((result) => {
+        console.log(`[执行规则]${ruleName}:执行接口返回`, { ruleId, runId, result });
+        addToast({ message: t("rules.executeStarted", "规则执行中..."), type: "info" });
+      })
+      .catch((err) => {
+        pendingExecutionsRef.current.delete(runId);
+        setExecDialog(null);
+        addToast({ message: t("rules.executeFailed", "执行失败"), type: "error" });
+        console.error(`[执行规则]${ruleName}:执行接口失败`, { ruleId, runId, err });
+      });
+  }, [addToast, execDialog?.ruleName, form.name, rules, t]);
 
   async function handleSaveAndExecute() {
     const savedRule = await handleSave();
     if (!savedRule) return;
-    await handleExecute(savedRule.id);
+    await handleExecute(savedRule.id, savedRule.name);
   }
 
   async function createActionOption() {
@@ -1025,7 +1041,11 @@ export default function RulesTab() {
       )}
       {execDialog && (
         <RulesProgressDialog
+          key={execDialog.runId}
           ruleId={execDialog.ruleId}
+          runId={execDialog.runId}
+          ruleName={execDialog.ruleName}
+          onReady={handleProgressDialogReady}
           onClose={() => setExecDialog(null)}
         />
       )}

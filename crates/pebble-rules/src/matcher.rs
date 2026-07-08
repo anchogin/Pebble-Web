@@ -52,8 +52,11 @@ pub(crate) fn evaluate_predicate(
             &haystack_lc
         }
         Domain => {
-            let at = msg.from_address.find('@').unwrap_or(msg.from_address.len());
-            haystack_lc = msg.from_address[at.saturating_add(1)..].to_lowercase();
+            haystack_lc = msg
+                .from_address
+                .split_once('@')
+                .map_or("", |(_, domain)| domain)
+                .to_lowercase();
             &haystack_lc
         }
         HasAttachment => {
@@ -216,6 +219,13 @@ mod tests {
     fn domain_ends_with() {
         let c = cond("and", &[("domain", "ends_with", "com")]);
         assert!(evaluate(&c, &msg()).unwrap());
+    }
+    #[test]
+    fn empty_from_address_domain_does_not_panic() {
+        let mut m = msg();
+        m.from_address.clear();
+        let c = cond("and", &[("domain", "contains", "example.com")]);
+        assert!(!evaluate(&c, &m).unwrap());
     }
     #[test]
     fn has_attachment_true() {

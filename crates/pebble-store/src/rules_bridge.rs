@@ -21,8 +21,8 @@ impl RuleStore for Store {
     fn add_label(&self, message_id: &str, label_name: &str) -> Result<()> {
         Store::add_label(self, message_id, label_name)
     }
-    fn move_message_to_folder(&self, message_id: &str, folder_id: &str) -> Result<()> {
-        Store::move_message_to_folder(self, message_id, folder_id)
+    fn bind_message_to_folder(&self, message_id: &str, folder_id: &str) -> Result<()> {
+        Store::bind_message_to_folder(self, message_id, folder_id)
     }
     fn update_message_flags(
         &self,

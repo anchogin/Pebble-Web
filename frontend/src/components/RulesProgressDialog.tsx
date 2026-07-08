@@ -1,20 +1,25 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CheckCircle, X, XCircle } from "lucide-react";
+import { cancelAllRulesRun, cancelRuleRun } from "@/lib/api";
 import { wsClient } from "@/lib/websocket";
 
 const RULE_EXEC_EVENTS = [
   "rules_exec_started",
   "rules_exec_progress",
   "rules_exec_completed",
+  "rules_exec_cancelled",
   "rules_exec_error",
 ] as const;
 
 type RuleExecEventType = (typeof RULE_EXEC_EVENTS)[number];
-type RuleExecStatus = "running" | "completed" | "error";
+type RuleExecStatus = "running" | "completed" | "cancelled" | "error";
 
 interface Props {
   readonly ruleId: string | null;
+  readonly runId: string;
+  readonly ruleName: string;
+  readonly onReady?: (ruleId: string | null, runId: string) => void;
   readonly onClose: () => void;
 }
 
@@ -31,6 +36,7 @@ interface RuleExecState {
 interface RuleExecMessage {
   readonly type: RuleExecEventType;
   readonly ruleId: string | null;
+  readonly runId: string | null;
   readonly data: Record<string, unknown>;
 }
 
@@ -52,10 +58,17 @@ function isRuleExecEventType(value: unknown): value is RuleExecEventType {
   return value === "rules_exec_started"
     || value === "rules_exec_progress"
     || value === "rules_exec_completed"
+    || value === "rules_exec_cancelled"
     || value === "rules_exec_error";
 }
 
 function readRuleId(value: unknown): string | null | undefined {
+  if (typeof value === "string") return value;
+  if (value === null) return null;
+  return undefined;
+}
+
+function readRunId(value: unknown): string | null | undefined {
   if (typeof value === "string") return value;
   if (value === null) return null;
   return undefined;
@@ -71,29 +84,52 @@ function parseRuleExecMessage(message: unknown): RuleExecMessage | null {
 
   const ruleId = readRuleId(message.rule_id);
   if (ruleId === undefined) return null;
+  const runId = readRunId(message.run_id);
+  if (runId === undefined) return null;
 
   return {
     type: message.type,
     ruleId,
+    runId,
     data: isRecord(message.data) ? message.data : {},
   };
 }
 
-export default function RulesProgressDialog({ ruleId, onClose }: Props) {
+export default function RulesProgressDialog({ ruleId, runId, ruleName, onReady, onClose }: Props) {
   const { t } = useTranslation();
   const [state, setState] = useState<RuleExecState>(initialState);
 
   useEffect(() => {
     setState(initialState);
-  }, [ruleId]);
+  }, [ruleId, runId]);
 
   useEffect(() => {
     const handleMessage = (message: unknown) => {
       const event = parseRuleExecMessage(message);
-      if (!event || event.ruleId !== ruleId) return;
+      if (!event) return;
+      if (event.ruleId !== ruleId || event.runId !== runId) {
+        console.log(`[执行规则]${ruleName}:忽略非当前执行事件`, {
+          expectedRuleId: ruleId,
+          expectedRunId: runId,
+          eventRuleId: event.ruleId,
+          eventRunId: event.runId,
+          type: event.type,
+        });
+        return;
+      }
+
+      const processed = readNumber(event.data, "processed");
+      const total = readNumber(event.data, "total");
+      if (event.type !== "rules_exec_progress" || processed === undefined || processed % 100 === 0 || processed === total) {
+        console.log(`[执行规则]${ruleName}:收到执行事件`, {
+          ruleId,
+          runId,
+          type: event.type,
+          data: event.data,
+        });
+      }
 
       if (event.type === "rules_exec_started") {
-        const total = readNumber(event.data, "total");
         setState((current) => ({
           ...current,
           total: total ?? null,
@@ -118,15 +154,28 @@ export default function RulesProgressDialog({ ruleId, onClose }: Props) {
       }
 
       if (event.type === "rules_exec_completed") {
-        const total = readNumber(event.data, "total");
         setState((current) => ({
           ...current,
           total: total ?? current.total,
-          processed: total ?? current.processed,
+          processed: readNumber(event.data, "processed") ?? total ?? current.processed,
           matched: readNumber(event.data, "matched") ?? current.matched,
           actionsApplied: readNumber(event.data, "actions_applied") ?? current.actionsApplied,
           errors: readNumber(event.data, "errors") ?? current.errors,
           status: "completed",
+          errorMessage: null,
+        }));
+        return;
+      }
+
+      if (event.type === "rules_exec_cancelled") {
+        setState((current) => ({
+          ...current,
+          total: total ?? current.total,
+          processed: readNumber(event.data, "processed") ?? current.processed,
+          matched: readNumber(event.data, "matched") ?? current.matched,
+          actionsApplied: readNumber(event.data, "actions_applied") ?? current.actionsApplied,
+          errors: readNumber(event.data, "errors") ?? current.errors,
+          status: "cancelled",
           errorMessage: null,
         }));
         return;
@@ -141,10 +190,29 @@ export default function RulesProgressDialog({ ruleId, onClose }: Props) {
     };
 
     RULE_EXEC_EVENTS.forEach((eventName) => wsClient.on(eventName, handleMessage));
+    let cancelled = false;
+    console.log(`[执行规则]${ruleName}:等待WebSocket就绪`, { ruleId, runId });
+    wsClient.connect();
+    wsClient.waitUntilAuthenticated().then((ready) => {
+      if (cancelled) return;
+      if (ready) {
+        console.log(`[执行规则]${ruleName}:WebSocket已就绪`, { ruleId, runId });
+        onReady?.(ruleId, runId);
+        return;
+      }
+      console.warn(`[执行规则]${ruleName}:WebSocket不可用`, { ruleId, runId });
+      setState((current) => ({
+        ...current,
+        status: "error",
+        errorMessage: t("rules.progressWsUnavailable", "WebSocket connection unavailable. Please refresh and try again."),
+      }));
+    });
+
     return () => {
+      cancelled = true;
       RULE_EXEC_EVENTS.forEach((eventName) => wsClient.off(eventName, handleMessage));
     };
-  }, [ruleId, t]);
+  }, [onReady, ruleId, runId, ruleName, t]);
 
   const hasTotal = state.total !== null;
   const percent = hasTotal
@@ -154,7 +222,23 @@ export default function RulesProgressDialog({ ruleId, onClose }: Props) {
     : 0;
   const isRunning = state.status === "running";
   const isCompleted = state.status === "completed";
+  const isCancelled = state.status === "cancelled";
   const isError = state.status === "error";
+
+  const handleClose = () => {
+    if (isRunning) {
+      const cancel = ruleId ? cancelRuleRun(ruleId, runId) : cancelAllRulesRun(runId);
+      void cancel
+        .then((result) => {
+          console.log(`[执行规则]${ruleName}:取消接口返回`, { ruleId, runId, result });
+        })
+        .catch((err: unknown) => {
+          console.warn(`[执行规则]${ruleName}:取消接口失败`, { ruleId, runId, err });
+        });
+    }
+    console.log(`[执行规则]${ruleName}:关闭进度弹窗`, { ruleId, runId, status: state.status });
+    onClose();
+  };
 
   return (
     <div
@@ -199,6 +283,7 @@ export default function RulesProgressDialog({ ruleId, onClose }: Props) {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
             {isCompleted && <CheckCircle size={18} color="#22c55e" />}
+            {isCancelled && <XCircle size={18} color="#f59e0b" />}
             {isError && <XCircle size={18} color="#ef4444" />}
             <h3
               id="rules-progress-dialog-title"
@@ -206,14 +291,14 @@ export default function RulesProgressDialog({ ruleId, onClose }: Props) {
                 margin: 0,
                 fontSize: "15px",
                 fontWeight: 600,
-                color: isCompleted ? "#22c55e" : isError ? "#ef4444" : "var(--color-text-primary)",
+                color: isCompleted ? "#22c55e" : isCancelled ? "#f59e0b" : isError ? "#ef4444" : "var(--color-text-primary)",
               }}
             >
               {ruleId ? t("rules.progressTitle") : t("rules.progressTitleAll")}
             </h3>
           </div>
           <button
-            onClick={onClose}
+            onClick={handleClose}
             aria-label={t("common.close")}
             style={{
               background: "none",
@@ -231,10 +316,10 @@ export default function RulesProgressDialog({ ruleId, onClose }: Props) {
         </div>
 
         <p style={{ margin: 0, fontSize: "13px", color: "var(--color-text-secondary)", lineHeight: 1.5 }}>
-          {isRunning ? t("rules.executing") : isCompleted ? t("rules.progressComplete", {
-            matched: state.matched,
-            applied: state.actionsApplied,
-          }) : state.errorMessage}
+            {isRunning ? t("rules.executing") : isCompleted ? t("rules.progressComplete", {
+              matched: state.matched,
+              applied: state.actionsApplied,
+            }) : isCancelled ? t("rules.progressCancelled", "Execution cancelled") : state.errorMessage}
         </p>
 
         <div
@@ -252,7 +337,7 @@ export default function RulesProgressDialog({ ruleId, onClose }: Props) {
               width: hasTotal ? `${percent}%` : "45%",
               height: "100%",
               borderRadius: "999px",
-              backgroundColor: isError ? "#ef4444" : isCompleted ? "#22c55e" : "var(--color-accent)",
+              backgroundColor: isError ? "#ef4444" : isCancelled ? "#f59e0b" : isCompleted ? "#22c55e" : "var(--color-accent)",
               transition: "width 180ms ease-out",
             }}
           />
@@ -276,7 +361,7 @@ export default function RulesProgressDialog({ ruleId, onClose }: Props) {
 
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
           <button
-            onClick={onClose}
+            onClick={handleClose}
             style={{
               padding: "7px 16px",
               borderRadius: "6px",

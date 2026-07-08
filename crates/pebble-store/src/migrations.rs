@@ -2,7 +2,7 @@ use pebble_core::{PebbleError, Result};
 use rusqlite::Connection;
 use std::collections::HashSet;
 
-const CURRENT_VERSION: u32 = 13;
+const CURRENT_VERSION: u32 = 15;
 const ACCOUNT_COLOR_PRESETS: [&str; 12] = [
     "#0ea5e9", "#22c55e", "#f59e0b", "#8b5cf6", "#f43f5e", "#14b8a6", "#6366f1", "#f97316",
     "#06b6d4", "#ec4899", "#84cc16", "#3b82f6",
@@ -316,6 +316,51 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
             .map_err(|e| PebbleError::Storage(format!("Migration V13 commit failed: {e}")))?;
     }
 
+    if version < 14 {
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| PebbleError::Storage(format!("Migration V14 begin failed: {e}")))?;
+        let has_server_linked: bool = tx
+            .prepare("SELECT server_linked FROM folders LIMIT 0")
+            .is_ok();
+        if !has_server_linked {
+            tx.execute_batch(
+                "ALTER TABLE folders ADD COLUMN server_linked INTEGER NOT NULL DEFAULT 1;",
+            )
+            .map_err(|e| PebbleError::Storage(format!("Migration V14 failed: {e}")))?;
+            tx.execute(
+                "UPDATE folders SET server_linked = 0 WHERE remote_id LIKE '__local_%' OR remote_id LIKE 'local-%'",
+                [],
+            )?;
+        }
+        set_schema_version(&tx, CURRENT_VERSION)?;
+        tx.commit()
+            .map_err(|e| PebbleError::Storage(format!("Migration V14 commit failed: {e}")))?;
+    }
+
+    if version < 15 {
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| PebbleError::Storage(format!("Migration V15 begin failed: {e}")))?;
+        tx.execute(
+            "DELETE FROM message_folders
+             WHERE rowid NOT IN (
+                 SELECT MIN(rowid) FROM message_folders GROUP BY message_id, folder_id
+             )",
+            [],
+        )
+        .map_err(|e| PebbleError::Storage(format!("Migration V15 dedupe failed: {e}")))?;
+        tx.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_message_folders_unique_pair
+             ON message_folders(message_id, folder_id)",
+            [],
+        )
+        .map_err(|e| PebbleError::Storage(format!("Migration V15 unique index failed: {e}")))?;
+        set_schema_version(&tx, CURRENT_VERSION)?;
+        tx.commit()
+            .map_err(|e| PebbleError::Storage(format!("Migration V15 commit failed: {e}")))?;
+    }
+
     Ok(())
 }
 
@@ -342,6 +387,7 @@ CREATE TABLE IF NOT EXISTS folders (
     parent_id TEXT,
     color TEXT,
     is_system INTEGER NOT NULL DEFAULT 0,
+    server_linked INTEGER NOT NULL DEFAULT 1,
     sort_order INTEGER NOT NULL DEFAULT 0
 );
 
@@ -567,5 +613,97 @@ mod tests {
             .unwrap();
         assert_eq!(version, 13);
         assert_eq!(account_id, None);
+    }
+
+    #[test]
+    fn migration_v15_dedupes_message_folders_and_adds_unique_index() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE accounts (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                display_name TEXT NOT NULL DEFAULT '',
+                color TEXT,
+                provider TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            CREATE TABLE folders (
+                id TEXT PRIMARY KEY,
+                account_id TEXT NOT NULL,
+                remote_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                folder_type TEXT NOT NULL DEFAULT 'folder',
+                role TEXT,
+                parent_id TEXT,
+                color TEXT,
+                is_system INTEGER NOT NULL DEFAULT 0,
+                server_linked INTEGER NOT NULL DEFAULT 1,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(account_id, remote_id)
+            );
+            CREATE TABLE messages (
+                id TEXT PRIMARY KEY,
+                account_id TEXT NOT NULL,
+                remote_id TEXT NOT NULL,
+                message_id_header TEXT,
+                thread_id TEXT NOT NULL,
+                subject TEXT NOT NULL DEFAULT '',
+                from_address TEXT NOT NULL DEFAULT '',
+                to_addresses TEXT NOT NULL DEFAULT '[]',
+                cc_addresses TEXT NOT NULL DEFAULT '[]',
+                bcc_addresses TEXT NOT NULL DEFAULT '[]',
+                reply_to TEXT,
+                date INTEGER NOT NULL,
+                received_at INTEGER NOT NULL,
+                body_text TEXT,
+                body_html TEXT,
+                snippet TEXT NOT NULL DEFAULT '',
+                is_read INTEGER NOT NULL DEFAULT 0,
+                is_starred INTEGER NOT NULL DEFAULT 0,
+                is_important INTEGER NOT NULL DEFAULT 0,
+                is_deleted INTEGER NOT NULL DEFAULT 0,
+                has_attachments INTEGER NOT NULL DEFAULT 0,
+                size INTEGER,
+                in_reply_to TEXT,
+                references_header TEXT,
+                last_synced_at INTEGER NOT NULL,
+                deleted_at INTEGER,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            CREATE TABLE message_folders (
+                message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                folder_id TEXT NOT NULL REFERENCES folders(id) ON DELETE CASCADE
+            );
+            INSERT INTO accounts (id, email, display_name, color, provider, created_at, updated_at)
+            VALUES ('a1', 'one@example.com', 'One', '#fff', 'imap', 1, 1);
+            INSERT INTO folders (id, account_id, remote_id, name, folder_type, is_system, server_linked, sort_order)
+            VALUES ('f1', 'a1', 'local-DMIT', 'DMIT', 'folder', 0, 0, 1000);
+            INSERT INTO messages (id, account_id, remote_id, thread_id, date, received_at, last_synced_at, created_at, updated_at)
+            VALUES ('m1', 'a1', 'r1', 't1', 1, 1, 1, 1, 1);
+            INSERT INTO message_folders (message_id, folder_id) VALUES ('m1', 'f1');
+            INSERT INTO message_folders (message_id, folder_id) VALUES ('m1', 'f1');
+            INSERT INTO message_folders (message_id, folder_id) VALUES ('m1', 'f1');
+            PRAGMA user_version = 14;",
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        let binding_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM message_folders WHERE message_id = 'm1' AND folder_id = 'f1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(binding_count, 1);
+
+        let duplicate_insert = conn.execute(
+            "INSERT INTO message_folders (message_id, folder_id) VALUES ('m1', 'f1')",
+            [],
+        );
+        assert!(duplicate_insert.is_err());
     }
 }

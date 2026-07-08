@@ -502,6 +502,7 @@ mod tests {
             parent_id: None,
             color: None,
             is_system: true,
+            server_linked: true,
             sort_order: 0,
         }
     }

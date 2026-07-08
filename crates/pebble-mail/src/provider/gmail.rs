@@ -645,6 +645,7 @@ impl FolderProvider for GmailProvider {
                     parent_id: None,
                     color: None,
                     is_system: label.label_type == Some("system".to_string()),
+                    server_linked: true,
                     sort_order: 0, // Filled in by caller
                 };
                 folders.push(folder);

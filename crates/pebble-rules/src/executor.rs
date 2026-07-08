@@ -51,12 +51,12 @@ pub fn apply_actions(
                     ));
                 }
                 let folder = resolve_folder(&name, &msg.account_id, store)?;
-                store.move_message_to_folder(&msg.id, &folder.id)
+                store.bind_message_to_folder(&msg.id, &folder.id)
             }
             ActionType::MarkRead => store.update_message_flags(&msg.id, Some(true), None),
             ActionType::Archive => {
                 let folder = resolve_archive(&msg.account_id, store)?;
-                store.move_message_to_folder(&msg.id, &folder.id)
+                store.bind_message_to_folder(&msg.id, &folder.id)
             }
             ActionType::SetKanbanColumn => {
                 let col_name = a.value.as_deref().unwrap_or("todo");
@@ -127,7 +127,7 @@ mod tests {
     #[derive(Default, Clone)]
     struct MockStore {
         add_label_calls: Arc<Mutex<Vec<(String, String)>>>,
-        move_calls: Arc<Mutex<Vec<(String, String)>>>,
+        bind_calls: Arc<Mutex<Vec<(String, String)>>>,
         flag_calls: Arc<Mutex<Vec<(String, Option<bool>, Option<bool>)>>>,
         kanban_calls: Arc<Mutex<Vec<KanbanCard>>>,
         archive_folder: Option<Folder>,
@@ -153,8 +153,8 @@ mod tests {
                 .push((mid.into(), name.into()));
             Ok(())
         }
-        fn move_message_to_folder(&self, mid: &str, fid: &str) -> Result<()> {
-            self.move_calls
+        fn bind_message_to_folder(&self, mid: &str, fid: &str) -> Result<()> {
+            self.bind_calls
                 .lock()
                 .unwrap()
                 .push((mid.into(), fid.into()));
@@ -212,6 +212,7 @@ mod tests {
                 parent_id: None,
                 color: None,
                 is_system,
+                server_linked: false,
                 sort_order: 1000,
             };
             self.created_folders.lock().unwrap().push(f.clone());
@@ -334,13 +335,14 @@ mod tests {
             parent_id: None,
             color: None,
             is_system: true,
+            server_linked: false,
             sort_order: 0,
         });
         let msg = mk_msg();
         let mut applied = HashSet::new();
         let _ = apply_actions(r#"[{"type":"Archive"}]"#, &msg, &s, &mut applied).unwrap();
         assert_eq!(
-            s.move_calls.lock().unwrap().clone(),
+            s.bind_calls.lock().unwrap().clone(),
             vec![("msg1".into(), "arch1".into())]
         );
         assert!(s.created_folders.lock().unwrap().is_empty());
@@ -372,6 +374,7 @@ mod tests {
             parent_id: None,
             color: None,
             is_system: false,
+            server_linked: false,
             sort_order: 5,
         });
         let msg = mk_msg();
@@ -384,7 +387,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            s.move_calls.lock().unwrap().clone(),
+            s.bind_calls.lock().unwrap().clone(),
             vec![("msg1".into(), "f1".into())]
         );
         assert!(s.created_folders.lock().unwrap().is_empty());
@@ -407,7 +410,7 @@ mod tests {
         assert_eq!(f.name, "Projects");
         assert_eq!(f.remote_id, "local-Projects");
         assert!(!f.is_system);
-        assert_eq!(s.move_calls.lock().unwrap()[0].1, f.id);
+        assert_eq!(s.bind_calls.lock().unwrap()[0].1, f.id);
     }
 
     #[test]
@@ -423,6 +426,7 @@ mod tests {
             parent_id: None,
             color: None,
             is_system: true,
+            server_linked: false,
             sort_order: 0,
         });
         let msg = mk_msg();
@@ -434,7 +438,7 @@ mod tests {
             &mut applied,
         )
         .unwrap();
-        assert_eq!(s.move_calls.lock().unwrap()[0].1, "arch");
+        assert_eq!(s.bind_calls.lock().unwrap()[0].1, "arch");
         assert!(s.created_folders.lock().unwrap().is_empty());
     }
 

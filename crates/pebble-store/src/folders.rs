@@ -1,4 +1,4 @@
-use pebble_core::{Folder, FolderRole, FolderType, Result};
+use pebble_core::{Folder, FolderRole, FolderType, PebbleError, Result};
 use rusqlite::{params, OptionalExtension};
 
 use crate::Store;
@@ -42,6 +42,27 @@ fn str_to_folder_role(s: &str) -> Option<FolderRole> {
     }
 }
 
+fn map_folder_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Folder> {
+    let role_str: Option<String> = row.get(5)?;
+    let is_system: i32 = row.get(8)?;
+    let server_linked: i32 = row.get(9)?;
+    Ok(Folder {
+        id: row.get(0)?,
+        account_id: row.get(1)?,
+        remote_id: row.get(2)?,
+        name: row.get(3)?,
+        folder_type: str_to_folder_type(&row.get::<_, String>(4)?),
+        role: role_str.and_then(|s| str_to_folder_role(&s)),
+        parent_id: row.get(6)?,
+        color: row.get(7)?,
+        is_system: is_system != 0,
+        server_linked: server_linked != 0,
+        sort_order: row.get(10)?,
+    })
+}
+
+const FOLDER_SELECT: &str = "id, account_id, remote_id, name, folder_type, role, parent_id, color, is_system, server_linked, sort_order";
+
 impl Store {
     /// Upsert a folder. Returns the effective database id (the existing row's id
     /// when the folder already exists, or `folder.id` for a new insert).
@@ -59,12 +80,14 @@ impl Store {
 
             if let Some(existing_id) = existing {
                 conn.execute(
-                    "UPDATE folders SET name = ?1, folder_type = ?2, role = ?3, sort_order = ?4
-                     WHERE id = ?5",
+                    "UPDATE folders SET name = ?1, folder_type = ?2, role = ?3, is_system = ?4, server_linked = ?5, sort_order = ?6
+                     WHERE id = ?7",
                     rusqlite::params![
                         folder.name,
                         folder_type_to_str(&folder.folder_type),
                         folder.role.as_ref().map(folder_role_to_str),
+                        folder.is_system as i32,
+                        folder.server_linked as i32,
                         folder.sort_order,
                         existing_id,
                     ],
@@ -72,8 +95,8 @@ impl Store {
                 Ok(existing_id)
             } else {
                 conn.execute(
-                    "INSERT INTO folders (id, account_id, remote_id, name, folder_type, role, parent_id, color, is_system, sort_order)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    "INSERT INTO folders (id, account_id, remote_id, name, folder_type, role, parent_id, color, is_system, server_linked, sort_order)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                     rusqlite::params![
                         folder.id,
                         folder.account_id,
@@ -84,6 +107,7 @@ impl Store {
                         folder.parent_id,
                         folder.color,
                         folder.is_system as i32,
+                        folder.server_linked as i32,
                         folder.sort_order,
                     ],
                 )?;
@@ -99,30 +123,25 @@ impl Store {
     ) -> Result<Option<Folder>> {
         let role_str = folder_role_to_str(&role);
         self.with_read(|conn| {
-            let mut stmt = conn
-                .prepare_cached(
-                    "SELECT id, account_id, remote_id, name, folder_type, role, parent_id, color, is_system, sort_order
-                     FROM folders WHERE account_id = ?1 AND role = ?2 LIMIT 1",
-                )?;
+            let mut stmt = conn.prepare_cached(&format!(
+                "SELECT {FOLDER_SELECT} FROM folders WHERE account_id = ?1 AND role = ?2 LIMIT 1"
+            ))?;
             let result = stmt
-                .query_row(params![account_id, role_str], |row| {
-                    let role_val: Option<String> = row.get(5)?;
-                    let is_system: i32 = row.get(8)?;
-                    Ok(Folder {
-                        id: row.get(0)?,
-                        account_id: row.get(1)?,
-                        remote_id: row.get(2)?,
-                        name: row.get(3)?,
-                        folder_type: str_to_folder_type(&row.get::<_, String>(4)?),
-                        role: role_val.and_then(|s| str_to_folder_role(&s)),
-                        parent_id: row.get(6)?,
-                        color: row.get(7)?,
-                        is_system: is_system != 0,
-                        sort_order: row.get(9)?,
-                    })
-                })
+                .query_row(params![account_id, role_str], map_folder_row)
                 .optional()?;
             Ok(result)
+        })
+    }
+
+    pub fn find_folder_by_id(&self, folder_id: &str) -> Result<Option<Folder>> {
+        self.with_read(|conn| {
+            conn.query_row(
+                &format!("SELECT {FOLDER_SELECT} FROM folders WHERE id = ?1 LIMIT 1"),
+                params![folder_id],
+                map_folder_row,
+            )
+            .optional()
+            .map_err(Into::into)
         })
     }
 
@@ -164,6 +183,7 @@ impl Store {
             parent_id: None,
             color: None,
             is_system,
+            server_linked: false,
             sort_order,
         };
         self.insert_folder(&folder)?;
@@ -180,35 +200,106 @@ impl Store {
         })
     }
 
+    pub fn rename_folder(&self, folder_id: &str, name: &str) -> Result<()> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(PebbleError::Validation(
+                "Folder name is required".to_string(),
+            ));
+        }
+        self.with_write(|conn| {
+            conn.execute(
+                "UPDATE folders SET name = ?1 WHERE id = ?2",
+                params![trimmed, folder_id],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn delete_folder_by_id(&self, folder_id: &str) -> Result<()> {
+        self.with_write(|conn| {
+            conn.execute("DELETE FROM folders WHERE id = ?1", params![folder_id])?;
+            Ok(())
+        })
+    }
+
+    pub fn set_folder_server_linked(&self, folder_id: &str, server_linked: bool) -> Result<()> {
+        self.with_write(|conn| {
+            conn.execute(
+                "UPDATE folders SET server_linked = ?1 WHERE id = ?2",
+                params![server_linked as i32, folder_id],
+            )?;
+            Ok(())
+        })
+    }
+
     pub fn list_folders(&self, account_id: &str) -> Result<Vec<Folder>> {
         self.with_read(|conn| {
-            let mut stmt = conn
-                .prepare(
-                    "SELECT id, account_id, remote_id, name, folder_type, role, parent_id, color, is_system, sort_order
-                     FROM folders WHERE account_id = ?1 ORDER BY sort_order ASC",
-                )?;
-            let rows = stmt
-                .query_map(rusqlite::params![account_id], |row| {
-                    let role_str: Option<String> = row.get(5)?;
-                    let is_system: i32 = row.get(8)?;
-                    Ok(Folder {
-                        id: row.get(0)?,
-                        account_id: row.get(1)?,
-                        remote_id: row.get(2)?,
-                        name: row.get(3)?,
-                        folder_type: str_to_folder_type(&row.get::<_, String>(4)?),
-                        role: role_str.and_then(|s| str_to_folder_role(&s)),
-                        parent_id: row.get(6)?,
-                        color: row.get(7)?,
-                        is_system: is_system != 0,
-                        sort_order: row.get(9)?,
-                    })
-                })?;
+            let mut stmt = conn.prepare(&format!(
+                "SELECT {FOLDER_SELECT} FROM folders WHERE account_id = ?1 ORDER BY sort_order ASC"
+            ))?;
+            let rows = stmt.query_map(rusqlite::params![account_id], map_folder_row)?;
             let mut folders = Vec::new();
             for row in rows {
                 folders.push(row?);
             }
             Ok(folders)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pebble_core::{Account, ProviderType};
+
+    fn account() -> Account {
+        let now = pebble_core::now_timestamp();
+        Account {
+            id: pebble_core::new_id(),
+            email: "test@example.com".to_string(),
+            display_name: "Test".to_string(),
+            color: None,
+            provider: ProviderType::Imap,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn locally_created_folder_is_unlinked_until_linked() {
+        let store = Store::open_in_memory().unwrap();
+        let account = account();
+        store.insert_account(&account).unwrap();
+
+        let folder = store
+            .find_or_create_folder_by_name(&account.id, "DMIT", false)
+            .unwrap();
+        assert!(!folder.server_linked);
+
+        store.set_folder_server_linked(&folder.id, true).unwrap();
+        let linked = store.find_folder_by_id(&folder.id).unwrap().unwrap();
+        assert!(linked.server_linked);
+
+        store.set_folder_server_linked(&folder.id, false).unwrap();
+        let unlinked = store.find_folder_by_id(&folder.id).unwrap().unwrap();
+        assert!(!unlinked.server_linked);
+    }
+
+    #[test]
+    fn rename_and_delete_folder_preserve_messages() {
+        let store = Store::open_in_memory().unwrap();
+        let account = account();
+        store.insert_account(&account).unwrap();
+
+        let folder = store
+            .find_or_create_folder_by_name(&account.id, "Old", false)
+            .unwrap();
+        store.rename_folder(&folder.id, "New").unwrap();
+        let renamed = store.find_folder_by_id(&folder.id).unwrap().unwrap();
+        assert_eq!(renamed.name, "New");
+
+        store.delete_folder_by_id(&folder.id).unwrap();
+        assert!(store.find_folder_by_id(&folder.id).unwrap().is_none());
     }
 }

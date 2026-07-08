@@ -1,3 +1,4 @@
+use pebble_core::traits::SearchHit;
 use pebble_core::{Attachment, Message, MessageSummary, PebbleError, Result};
 use rusqlite::{params, OptionalExtension, Row};
 use std::collections::HashMap;
@@ -591,6 +592,16 @@ impl Store {
             conn.execute(
                 "UPDATE messages SET is_deleted = 0, deleted_at = NULL, updated_at = ?1 WHERE id = ?2",
                 params![now, message_id],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn bind_message_to_folder(&self, message_id: &str, folder_id: &str) -> Result<()> {
+        self.with_write(|conn| {
+            conn.execute(
+                "INSERT OR IGNORE INTO message_folders (message_id, folder_id) VALUES (?1, ?2)",
+                params![message_id, folder_id],
             )?;
             Ok(())
         })
@@ -1332,6 +1343,179 @@ impl Store {
         })
     }
 
+    pub fn search_messages_wide(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>> {
+        let term = query.trim();
+        if term.is_empty() {
+            return Ok(Vec::new());
+        }
+        let pattern = format!("%{}%", term.to_lowercase());
+        self.with_read(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, subject, snippet, from_address, body_text, date
+                 FROM messages
+                 WHERE is_deleted = 0
+                   AND (
+                       lower(subject) LIKE ?1
+                    OR lower(snippet) LIKE ?1
+                    OR lower(body_text) LIKE ?1
+                    OR lower(body_html_raw) LIKE ?1
+                    OR lower(from_address) LIKE ?1
+                    OR lower(from_name) LIKE ?1
+                    OR lower(to_list) LIKE ?1
+                    OR lower(cc_list) LIKE ?1
+                    OR lower(bcc_list) LIKE ?1
+                    OR lower(COALESCE(message_id_header, '')) LIKE ?1
+                    OR lower(COALESCE(in_reply_to, '')) LIKE ?1
+                    OR lower(COALESCE(references_header, '')) LIKE ?1
+                   )
+                 ORDER BY date DESC
+                 LIMIT ?2",
+            )?;
+            let rows = stmt.query_map(params![pattern, limit as u32], |row| {
+                let subject: String = row.get(1)?;
+                let snippet: String = row.get(2)?;
+                let body_text: String = row.get(4)?;
+                let display_snippet = if body_text.contains(term) {
+                    body_text
+                } else if snippet.contains(term) {
+                    snippet
+                } else {
+                    subject.clone()
+                };
+                Ok(SearchHit {
+                    message_id: row.get(0)?,
+                    score: 1.0,
+                    snippet: display_snippet,
+                    subject: Some(subject),
+                    from_address: Some(row.get(3)?),
+                    date: Some(row.get(5)?),
+                })
+            })?;
+            let mut hits = Vec::new();
+            for row in rows {
+                hits.push(row?);
+            }
+            Ok(hits)
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn advanced_search_messages(
+        &self,
+        text: Option<&str>,
+        from: Option<&str>,
+        to: Option<&str>,
+        subject: Option<&str>,
+        date_from: Option<i64>,
+        date_to: Option<i64>,
+        has_attachment: Option<bool>,
+        folder_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<SearchHit>> {
+        let text = text.map(str::trim).filter(|value| !value.is_empty());
+        let from = from.map(str::trim).filter(|value| !value.is_empty());
+        let to = to.map(str::trim).filter(|value| !value.is_empty());
+        let subject = subject.map(str::trim).filter(|value| !value.is_empty());
+        let folder_id = folder_id.map(str::trim).filter(|value| !value.is_empty());
+
+        self.with_read(|conn| {
+            let mut sql = String::from(
+                "SELECT DISTINCT m.id, m.subject, m.snippet, m.from_address, m.body_text, m.date
+                 FROM messages m",
+            );
+            if folder_id.is_some() {
+                sql.push_str(" JOIN message_folders mf ON m.id = mf.message_id");
+            }
+            sql.push_str(" WHERE m.is_deleted = 0");
+
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+            if let Some(value) = text {
+                params.push(Box::new(format!("%{}%", value.to_lowercase())));
+                let index = params.len();
+                sql.push_str(&format!(
+                    " AND (
+                        lower(m.subject) LIKE ?{index}
+                     OR lower(m.snippet) LIKE ?{index}
+                     OR lower(m.body_text) LIKE ?{index}
+                     OR lower(m.body_html_raw) LIKE ?{index}
+                     OR lower(m.from_address) LIKE ?{index}
+                     OR lower(m.from_name) LIKE ?{index}
+                     OR lower(m.to_list) LIKE ?{index}
+                     OR lower(m.cc_list) LIKE ?{index}
+                     OR lower(m.bcc_list) LIKE ?{index}
+                     OR lower(COALESCE(m.message_id_header, '')) LIKE ?{index}
+                     OR lower(COALESCE(m.in_reply_to, '')) LIKE ?{index}
+                     OR lower(COALESCE(m.references_header, '')) LIKE ?{index}
+                    )"
+                ));
+            }
+            if let Some(value) = from {
+                params.push(Box::new(format!("%{}%", value.to_lowercase())));
+                let index = params.len();
+                sql.push_str(&format!(
+                    " AND (lower(m.from_address) LIKE ?{index} OR lower(m.from_name) LIKE ?{index})"
+                ));
+            }
+            if let Some(value) = to {
+                params.push(Box::new(format!("%{}%", value.to_lowercase())));
+                let index = params.len();
+                sql.push_str(&format!(
+                    " AND (lower(m.to_list) LIKE ?{index} OR lower(m.cc_list) LIKE ?{index} OR lower(m.bcc_list) LIKE ?{index})"
+                ));
+            }
+            if let Some(value) = subject {
+                params.push(Box::new(format!("%{}%", value.to_lowercase())));
+                let index = params.len();
+                sql.push_str(&format!(" AND lower(m.subject) LIKE ?{index}"));
+            }
+            if let Some(value) = date_from {
+                params.push(Box::new(value));
+                let index = params.len();
+                sql.push_str(&format!(" AND m.date >= ?{index}"));
+            }
+            if let Some(value) = date_to {
+                params.push(Box::new(value));
+                let index = params.len();
+                sql.push_str(&format!(" AND m.date <= ?{index}"));
+            }
+            if let Some(value) = has_attachment {
+                params.push(Box::new(value as i32));
+                let index = params.len();
+                sql.push_str(&format!(" AND m.has_attachments = ?{index}"));
+            }
+            if let Some(value) = folder_id {
+                params.push(Box::new(value.to_string()));
+                let index = params.len();
+                sql.push_str(&format!(" AND mf.folder_id = ?{index}"));
+            }
+            params.push(Box::new(limit as u32));
+            let limit_index = params.len();
+            sql.push_str(&format!(" ORDER BY m.date DESC LIMIT ?{limit_index}"));
+
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|param| param.as_ref()).collect();
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(param_refs), |row| {
+                let subject: String = row.get(1)?;
+                let snippet: String = row.get(2)?;
+                Ok(SearchHit {
+                    message_id: row.get(0)?,
+                    score: 1.0,
+                    snippet: if snippet.is_empty() { subject.clone() } else { snippet },
+                    subject: Some(subject),
+                    from_address: Some(row.get(3)?),
+                    date: Some(row.get(5)?),
+                })
+            })?;
+            let mut hits = Vec::new();
+            for row in rows {
+                hits.push(row?);
+            }
+            Ok(hits)
+        })
+    }
+
     /// Count unread messages per folder for an account.
     pub fn get_folder_unread_counts(
         &self,
@@ -1362,6 +1546,7 @@ impl Store {
 mod remote_id_scope_tests {
     use crate::Store;
     use pebble_core::*;
+    use std::collections::HashSet;
 
     fn make_account() -> Account {
         let now = now_timestamp();
@@ -1387,6 +1572,7 @@ mod remote_id_scope_tests {
             parent_id: None,
             color: None,
             is_system: true,
+            server_linked: true,
             sort_order,
         }
     }
@@ -1462,6 +1648,96 @@ mod remote_id_scope_tests {
         assert!(
             matches!(err, PebbleError::Internal(message) if message.contains("missing-message"))
         );
+    }
+
+    #[test]
+    fn rule_move_to_folder_only_binds_message_without_mutating_it() {
+        let store = Store::open_in_memory().unwrap();
+        let account = make_account();
+        store.insert_account(&account).unwrap();
+
+        let inbox = make_folder(&account.id, "INBOX", FolderRole::Inbox, 0);
+        store.insert_folder(&inbox).unwrap();
+
+        let mut msg = make_message(&account.id, "123");
+        msg.updated_at = 123;
+        store
+            .insert_message(&msg, std::slice::from_ref(&inbox.id))
+            .unwrap();
+
+        for _ in 0..2 {
+            let mut applied = HashSet::new();
+            pebble_rules::apply_actions(
+                r#"[{"type":"MoveToFolder","value":"Projects"}]"#,
+                &msg,
+                &store,
+                &mut applied,
+            )
+            .unwrap();
+        }
+
+        let projects = store
+            .find_folder_by_name(&account.id, "Projects")
+            .unwrap()
+            .expect("rule action should create the target folder");
+        let (message_count, inbox_bindings, project_bindings) = store
+            .with_read(|conn| {
+                let message_count: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM messages WHERE id = ?1",
+                    rusqlite::params![msg.id],
+                    |row| row.get(0),
+                )?;
+                let inbox_bindings: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM message_folders WHERE message_id = ?1 AND folder_id = ?2",
+                    rusqlite::params![msg.id, inbox.id],
+                    |row| row.get(0),
+                )?;
+                let project_bindings: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM message_folders WHERE message_id = ?1 AND folder_id = ?2",
+                    rusqlite::params![msg.id, projects.id],
+                    |row| row.get(0),
+                )?;
+                Ok((message_count, inbox_bindings, project_bindings))
+            })
+            .unwrap();
+        let fetched = store.get_message(&msg.id).unwrap().unwrap();
+
+        assert_eq!(message_count, 1);
+        assert_eq!(inbox_bindings, 1);
+        assert_eq!(project_bindings, 1);
+        assert_eq!(fetched.updated_at, 123);
+    }
+
+    #[test]
+    fn deleting_folder_removes_only_binding_not_message() {
+        let store = Store::open_in_memory().unwrap();
+        let account = make_account();
+        store.insert_account(&account).unwrap();
+
+        let inbox = make_folder(&account.id, "INBOX", FolderRole::Inbox, 0);
+        store.insert_folder(&inbox).unwrap();
+
+        let msg = make_message(&account.id, "123");
+        store
+            .insert_message(&msg, std::slice::from_ref(&inbox.id))
+            .unwrap();
+
+        store
+            .delete_folder_by_remote_id(&account.id, &inbox.remote_id)
+            .unwrap();
+
+        let binding_count = store
+            .with_read(|conn| {
+                Ok(conn.query_row(
+                    "SELECT COUNT(*) FROM message_folders WHERE message_id = ?1 AND folder_id = ?2",
+                    rusqlite::params![msg.id, inbox.id],
+                    |row| row.get::<_, i64>(0),
+                )?)
+            })
+            .unwrap();
+
+        assert!(store.get_message(&msg.id).unwrap().is_some());
+        assert_eq!(binding_count, 0);
     }
 
     #[test]
@@ -1553,6 +1829,7 @@ mod tombstone_tests {
             parent_id: None,
             color: None,
             is_system: true,
+            server_linked: true,
             sort_order: 0,
         };
         store.insert_folder(&folder).unwrap();
@@ -1648,6 +1925,7 @@ mod thread_listing_tests {
             parent_id: None,
             color: None,
             is_system: true,
+            server_linked: true,
             sort_order: 0,
         };
         store.insert_folder(&folder).unwrap();
@@ -1738,6 +2016,7 @@ mod thread_listing_tests {
             parent_id: None,
             color: None,
             is_system: true,
+            server_linked: true,
             sort_order: 1,
         };
         store.insert_folder(&archive).unwrap();
@@ -1759,5 +2038,149 @@ mod thread_listing_tests {
         assert_eq!(threads.len(), 1);
         assert_eq!(threads[0].message_count, 2);
         assert_eq!(threads[0].snippet, format!("snippet-{base}"));
+    }
+
+    #[test]
+    fn list_messages_by_folders_returns_messages_from_multiple_accounts() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_one, inbox_one) = seed_account_and_folder(&store);
+        let account_two = new_id();
+        store
+            .insert_account(&Account {
+                id: account_two.clone(),
+                email: "two@example.com".to_string(),
+                display_name: "Two".to_string(),
+                color: None,
+                provider: ProviderType::Imap,
+                created_at: now_timestamp(),
+                updated_at: now_timestamp(),
+            })
+            .unwrap();
+        let inbox_two = Folder {
+            id: new_id(),
+            account_id: account_two.clone(),
+            remote_id: "INBOX".to_string(),
+            name: "Inbox".to_string(),
+            folder_type: FolderType::Folder,
+            role: Some(FolderRole::Inbox),
+            parent_id: None,
+            color: None,
+            is_system: true,
+            server_linked: true,
+            sort_order: 0,
+        };
+        store.insert_folder(&inbox_two).unwrap();
+
+        let msg_one = make_msg(&account_one, &new_id(), "one@example.com", 100);
+        let msg_two = make_msg(&account_two, &new_id(), "two@example.com", 200);
+        store
+            .insert_message(&msg_one, std::slice::from_ref(&inbox_one))
+            .unwrap();
+        store
+            .insert_message(&msg_two, std::slice::from_ref(&inbox_two.id))
+            .unwrap();
+
+        let messages = store
+            .list_messages_by_folders(&[inbox_one, inbox_two.id], 50, 0)
+            .unwrap();
+
+        let account_ids: Vec<_> = messages
+            .into_iter()
+            .map(|message| message.account_id)
+            .collect();
+        assert_eq!(account_ids, vec![account_two, account_one]);
+    }
+
+    #[test]
+    fn search_messages_wide_matches_subject_body_and_addresses() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, inbox_id) = seed_account_and_folder(&store);
+        let mut subject_msg = make_msg(&account_id, &new_id(), "sender@example.com", 100);
+        subject_msg.id = "subject-hit".to_string();
+        subject_msg.subject = "你好项目".to_string();
+        let mut body_msg = make_msg(&account_id, &new_id(), "sender@example.com", 90);
+        body_msg.id = "body-hit".to_string();
+        body_msg.body_text = "正文里有你好".to_string();
+        let mut address_msg = make_msg(&account_id, &new_id(), "sender@example.com", 80);
+        address_msg.id = "address-hit".to_string();
+        address_msg.from_address = "sender-unique@example.com".to_string();
+        address_msg.in_reply_to = Some("reply-unique".to_string());
+        address_msg.references_header = Some("reference-unique".to_string());
+        address_msg.to_list = vec![EmailAddress {
+            name: Some("你好收件人".to_string()),
+            address: "recipient@example.com".to_string(),
+        }];
+        address_msg.cc_list = vec![EmailAddress {
+            name: Some("Copy Unique".to_string()),
+            address: "copy-unique@example.com".to_string(),
+        }];
+        address_msg.bcc_list = vec![EmailAddress {
+            name: Some("Blind Unique".to_string()),
+            address: "blind-unique@example.com".to_string(),
+        }];
+
+        store
+            .insert_message(&subject_msg, std::slice::from_ref(&inbox_id))
+            .unwrap();
+        store
+            .insert_message(&body_msg, std::slice::from_ref(&inbox_id))
+            .unwrap();
+        store
+            .insert_message(&address_msg, std::slice::from_ref(&inbox_id))
+            .unwrap();
+
+        let hits = store.search_messages_wide("你好", 10).unwrap();
+        let ids: Vec<_> = hits.into_iter().map(|hit| hit.message_id).collect();
+        assert_eq!(ids, vec!["subject-hit", "body-hit", "address-hit"]);
+
+        for term in [
+            "sender-unique",
+            "Copy Unique",
+            "blind-unique",
+            "reply-unique",
+            "reference-unique",
+        ] {
+            let hits = store.search_messages_wide(term, 10).unwrap();
+            let ids: Vec<_> = hits.into_iter().map(|hit| hit.message_id).collect();
+            assert_eq!(
+                ids,
+                vec!["address-hit"],
+                "expected {term} to match address/header fields"
+            );
+        }
+    }
+
+    #[test]
+    fn advanced_search_messages_matches_date_from_against_database_messages() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, inbox_id) = seed_account_and_folder(&store);
+        let mut old_msg = make_msg(&account_id, &new_id(), "old@example.com", 1_722_000_000);
+        old_msg.id = "old-before-range".to_string();
+        let mut new_msg = make_msg(&account_id, &new_id(), "new@example.com", 1_722_800_000);
+        new_msg.id = "new-in-range".to_string();
+
+        store
+            .insert_message(&old_msg, std::slice::from_ref(&inbox_id))
+            .unwrap();
+        store
+            .insert_message(&new_msg, std::slice::from_ref(&inbox_id))
+            .unwrap();
+
+        let hits = store
+            .advanced_search_messages(
+                None,
+                None,
+                None,
+                None,
+                Some(1_722_700_800),
+                None,
+                None,
+                None,
+                10,
+            )
+            .unwrap();
+
+        let ids: Vec<_> = hits.into_iter().map(|hit| hit.message_id).collect();
+        assert_eq!(ids, vec!["new-in-range"]);
     }
 }

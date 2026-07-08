@@ -14,6 +14,61 @@ use serde_json::json;
 pub struct ListMessagesParams {
     pub limit: Option<u32>,
     pub offset: Option<u32>,
+    pub folder_ids: Option<String>,
+    #[serde(rename = "folderIds")]
+    pub folder_ids_camel: Option<String>,
+}
+
+impl ListMessagesParams {
+    fn selected_folder_ids(&self, fallback_folder_id: &str) -> Vec<String> {
+        let raw = self
+            .folder_ids
+            .as_deref()
+            .or(self.folder_ids_camel.as_deref());
+        let Some(raw) = raw else {
+            return vec![fallback_folder_id.to_string()];
+        };
+        let folder_ids: Vec<String> = raw
+            .split(',')
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(ToString::to_string)
+            .collect();
+        if folder_ids.is_empty() {
+            vec![fallback_folder_id.to_string()]
+        } else {
+            folder_ids
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn folder_ids_param_parses_comma_separated_ids() {
+        let params = ListMessagesParams {
+            limit: None,
+            offset: None,
+            folder_ids: Some("f1,f2,, f3 ".to_string()),
+            folder_ids_camel: None,
+        };
+
+        assert_eq!(params.selected_folder_ids("fallback"), vec!["f1", "f2", "f3"]);
+    }
+
+    #[test]
+    fn folder_ids_param_accepts_camel_case_alias() {
+        let params = ListMessagesParams {
+            limit: None,
+            offset: None,
+            folder_ids: None,
+            folder_ids_camel: Some("f2,f3".to_string()),
+        };
+
+        assert_eq!(params.selected_folder_ids("fallback"), vec!["f2", "f3"]);
+    }
 }
 
 pub async fn list_messages_by_folder(
@@ -23,65 +78,11 @@ pub async fn list_messages_by_folder(
 ) -> Result<Json<Vec<MessageSummary>>, ApiError> {
     let limit = params.limit.unwrap_or(50);
     let offset = params.offset.unwrap_or(0);
+    let folder_ids = params.selected_folder_ids(&folder_id);
     let store = state.store.clone();
 
     let messages = store
-        .with_read_async(move |conn| {
-            let sql =
-                "SELECT m.id, m.account_id, m.remote_id, m.message_id_header, m.in_reply_to, \
-                 m.references_header, m.thread_id, m.subject, m.snippet, m.from_address, \
-                 m.from_name, m.to_list, m.cc_list, m.bcc_list, \
-                 m.has_attachments, m.is_read, m.is_starred, m.is_draft, \
-                 m.date, m.remote_version, m.is_deleted, m.deleted_at, m.created_at, m.updated_at \
-                 FROM messages m \
-                 JOIN message_folders mf ON m.id = mf.message_id \
-                 WHERE mf.folder_id = ?1 AND m.is_deleted = 0 \
-                 ORDER BY m.date DESC \
-                 LIMIT ?2 OFFSET ?3";
-            let mut stmt = conn.prepare(sql)?;
-            let rows = stmt.query_map(rusqlite::params![folder_id, limit, offset], |row| {
-                let to_json: String = row.get(11)?;
-                let cc_json: String = row.get(12)?;
-                let bcc_json: String = row.get(13)?;
-                let has_attachments: i32 = row.get(14)?;
-                let is_read: i32 = row.get(15)?;
-                let is_starred: i32 = row.get(16)?;
-                let is_draft: i32 = row.get(17)?;
-                let is_deleted: i32 = row.get(20)?;
-                Ok(MessageSummary {
-                    id: row.get(0)?,
-                    account_id: row.get(1)?,
-                    remote_id: row.get(2)?,
-                    message_id_header: row.get(3)?,
-                    in_reply_to: row.get(4)?,
-                    references_header: row.get(5)?,
-                    thread_id: row.get(6)?,
-                    subject: row.get(7)?,
-                    snippet: row.get(8)?,
-                    from_address: row.get(9)?,
-                    from_name: row.get(10)?,
-                    to_list: serde_json::from_str(&to_json).unwrap_or_default(),
-                    cc_list: serde_json::from_str(&cc_json).unwrap_or_default(),
-                    bcc_list: serde_json::from_str(&bcc_json).unwrap_or_default(),
-                    has_attachments: has_attachments != 0,
-                    is_read: is_read != 0,
-                    is_starred: is_starred != 0,
-                    is_draft: is_draft != 0,
-                    date: row.get(18)?,
-                    remote_version: row.get(19)?,
-                    is_deleted: is_deleted != 0,
-                    deleted_at: row.get(21)?,
-                    created_at: row.get(22)?,
-                    updated_at: row.get(23)?,
-                })
-            })?;
-            let mut messages = Vec::new();
-            for row in rows {
-                messages.push(row?);
-            }
-            Ok(messages)
-        })
-        .await
+        .list_messages_by_folders(&folder_ids, limit, offset)
         .map_err(|e| ApiError::Internal(format!("Failed to list messages: {e}")))?;
 
     Ok(Json(messages))

@@ -82,6 +82,15 @@ pub fn build_router(state: AppStateRef, static_dir: &str) -> Router {
             get(folders::list_folders).post(folders::create_folder),
         )
         .route(
+            "/api/v1/folders/{folder_id}",
+            put(folders::update_folder).delete(folders::delete_folder),
+        )
+        .route("/api/v1/folders/{folder_id}/link", post(folders::link_folder))
+        .route(
+            "/api/v1/folders/{folder_id}/unlink",
+            post(folders::unlink_folder),
+        )
+        .route(
             "/api/v1/accounts/{account_id}/folder-unread-counts",
             get(folders::get_folder_unread_counts),
         )
@@ -209,7 +218,12 @@ pub fn build_router(state: AppStateRef, static_dir: &str) -> Router {
             get(rules::list_rules).post(rules::create_rule),
         )
         .route("/api/v1/rules/execute-all", post(rules::execute_all_rules))
+        .route(
+            "/api/v1/rules/execute-all/cancel",
+            post(rules::cancel_all_rules_run),
+        )
         .route("/api/v1/rules/{id}/execute", post(rules::execute_rule))
+        .route("/api/v1/rules/{id}/cancel", post(rules::cancel_rule_run))
         .route(
             "/api/v1/rules/{id}",
             put(rules::update_rule).delete(rules::delete_rule),

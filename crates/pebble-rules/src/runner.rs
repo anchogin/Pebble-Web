@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use crate::executor::apply_actions;
 use crate::matcher::evaluate;
 use crate::model::ActionType;
-use crate::RuleStore;
+use crate::{RuleStore, RunControl};
 use pebble_core::{Message, Result, Rule};
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
@@ -29,6 +29,14 @@ pub enum RuleProgressEvent {
     },
     Completed {
         total: usize,
+        processed: usize,
+        matched: usize,
+        actions_applied: usize,
+        errors: usize,
+    },
+    Cancelled {
+        total: usize,
+        processed: usize,
         matched: usize,
         actions_applied: usize,
         errors: usize,
@@ -43,11 +51,15 @@ pub trait ProgressSink {
 }
 
 /// Run all enabled rules against every non-deleted message in the store.
-pub fn run_all_rules(store: &dyn RuleStore, sink: Option<&dyn ProgressSink>) -> Result<RunStats> {
+pub fn run_all_rules(
+    store: &dyn RuleStore,
+    sink: Option<&dyn ProgressSink>,
+    control: Option<&RunControl>,
+) -> Result<RunStats> {
     let rules = store.list_all_rules()?;
     let enabled: Vec<Rule> = rules.into_iter().filter(|r| r.is_enabled).collect();
     let ids = store.list_message_ids_for_rules()?;
-    run_batch(&enabled, &ids, store, sink)
+    run_batch(&enabled, &ids, store, sink, control)
 }
 
 /// Run a single rule against every message (regardless of enabled state,
@@ -56,13 +68,14 @@ pub fn run_single_rule(
     rule: &Rule,
     store: &dyn RuleStore,
     sink: Option<&dyn ProgressSink>,
+    control: Option<&RunControl>,
 ) -> Result<RunStats> {
     let ids = if let Some(ref aid) = rule.account_id {
         store.list_message_ids_for_account(aid)?
     } else {
         store.list_message_ids_for_rules()?
     };
-    run_batch(std::slice::from_ref(rule), &ids, store, sink)
+    run_batch(std::slice::from_ref(rule), &ids, store, sink, control)
 }
 
 /// Run all rules applicable to a newly-inserted message. Called by `sync.rs`
@@ -94,8 +107,14 @@ fn run_batch(
     ids: &[String],
     store: &dyn RuleStore,
     sink: Option<&dyn ProgressSink>,
+    control: Option<&RunControl>,
 ) -> Result<RunStats> {
     let total = ids.len();
+    tracing::info!(
+        rule_count = rules.len(),
+        total,
+        "rules runner: batch started"
+    );
     let mut stats = RunStats {
         total,
         ..Default::default()
@@ -104,6 +123,27 @@ fn run_batch(
         s.emit(RuleProgressEvent::Started { total });
     }
     for (idx, id) in ids.iter().enumerate() {
+        if control.is_some_and(RunControl::is_cancelled) {
+            tracing::info!(
+                processed = idx,
+                total,
+                matched = stats.matched,
+                actions_applied = stats.actions_applied,
+                errors = stats.errors,
+                "rules runner: batch cancelled"
+            );
+            if let Some(s) = sink {
+                s.emit(RuleProgressEvent::Cancelled {
+                    total,
+                    processed: idx,
+                    matched: stats.matched,
+                    actions_applied: stats.actions_applied,
+                    errors: stats.errors,
+                });
+            }
+            return Ok(stats);
+        }
+        tracing::debug!(processed = idx, total, message_id = %id, "rules runner: loading message");
         let msg = match store.get_message(id) {
             Ok(Some(m)) => m,
             Ok(None) => continue,
@@ -143,19 +183,36 @@ fn run_batch(
         if matched {
             stats.matched += 1;
         }
-        if (idx + 1) % 100 == 0 {
-            if let Some(s) = sink {
-                s.emit(RuleProgressEvent::Progress {
-                    processed: idx + 1,
-                    matched: stats.matched,
-                    actions_applied: stats.actions_applied,
-                });
-            }
+        if let Some(s) = sink {
+            s.emit(RuleProgressEvent::Progress {
+                processed: idx + 1,
+                matched: stats.matched,
+                actions_applied: stats.actions_applied,
+            });
+        }
+        if (idx + 1) % 100 == 0 || idx + 1 == total {
+            tracing::info!(
+                processed = idx + 1,
+                total,
+                matched = stats.matched,
+                actions_applied = stats.actions_applied,
+                errors = stats.errors,
+                message_id = %id,
+                "rules runner: progress checkpoint"
+            );
         }
     }
+    tracing::info!(
+        total,
+        matched = stats.matched,
+        actions_applied = stats.actions_applied,
+        errors = stats.errors,
+        "rules runner: batch completed"
+    );
     if let Some(s) = sink {
         s.emit(RuleProgressEvent::Completed {
             total,
+            processed: total,
             matched: stats.matched,
             actions_applied: stats.actions_applied,
             errors: stats.errors,
@@ -178,12 +235,13 @@ fn applicable_to_message(rule: &Rule, msg: &Message) -> bool {
 mod tests {
     use super::*;
     use pebble_core::{EmailAddress, Folder, FolderRole, FolderType, KanbanCard};
+    use std::sync::{Arc, Mutex};
 
     #[derive(Default, Clone)]
     struct MockStore {
         messages: Vec<Message>,
-        add_label_calls: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
-        flag_calls: std::sync::Arc<std::sync::Mutex<Vec<(String, Option<bool>, Option<bool>)>>>,
+        add_label_calls: Arc<Mutex<Vec<(String, String)>>>,
+        flag_calls: Arc<Mutex<Vec<(String, Option<bool>, Option<bool>)>>>,
         rules: Vec<Rule>,
     }
 
@@ -209,7 +267,7 @@ mod tests {
                 .push((mid.into(), name.into()));
             Ok(())
         }
-        fn move_message_to_folder(&self, _mid: &str, _fid: &str) -> Result<()> {
+        fn bind_message_to_folder(&self, _mid: &str, _fid: &str) -> Result<()> {
             Ok(())
         }
         fn update_message_flags(&self, id: &str, r: Option<bool>, s: Option<bool>) -> Result<()> {
@@ -241,6 +299,7 @@ mod tests {
                 parent_id: None,
                 color: None,
                 is_system: false,
+                server_linked: false,
                 sort_order: 1000,
             })
         }
@@ -329,7 +388,7 @@ mod tests {
         let mut s = MockStore::default();
         s.messages = vec![mk_msg("m1", "acc1", "boss@x.com")];
         s.rules = vec![mk_rule("r1", "boss", "ignored", None)];
-        let stats = run_all_rules(&s, None).unwrap();
+        let stats = run_all_rules(&s, None, None).unwrap();
         assert_eq!(stats.matched, 1);
         assert!(s.add_label_calls.lock().unwrap()[0].1 == "ignored");
     }
@@ -339,7 +398,7 @@ mod tests {
         let mut s = MockStore::default();
         s.messages = vec![mk_msg("m1", "acc1", "boss@x.com")];
         s.rules = vec![mk_rule("r1", "boss", "wglabel", Some("acc2"))];
-        let stats = run_all_rules(&s, None).unwrap();
+        let stats = run_all_rules(&s, None, None).unwrap();
         assert_eq!(stats.matched, 0);
         assert!(s.add_label_calls.lock().unwrap().is_empty());
     }
@@ -352,7 +411,7 @@ mod tests {
             mk_msg("m2", "acc1", "miss@x.com"),
         ];
         s.rules = vec![mk_rule("r1", "boss", "bo", None)];
-        let stats = run_all_rules(&s, None).unwrap();
+        let stats = run_all_rules(&s, None, None).unwrap();
         assert_eq!(stats.total, 2);
         assert_eq!(stats.matched, 1);
     }
@@ -364,7 +423,7 @@ mod tests {
         let mut r = mk_rule("r1", "boss", "lab", None);
         r.is_enabled = false;
         s.rules = vec![];
-        let stats = run_single_rule(&r, &s, None).unwrap();
+        let stats = run_single_rule(&r, &s, None, None).unwrap();
         assert_eq!(stats.matched, 1);
     }
 
@@ -397,6 +456,52 @@ mod tests {
     #[test]
     fn emits_started_and_completed_no_sink_safe() {
         let s = MockStore::default();
-        run_all_rules(&s, None).unwrap(); // no panic
+        run_all_rules(&s, None, None).unwrap(); // no panic
+    }
+
+    #[derive(Clone)]
+    struct CancellingSink {
+        control: RunControl,
+        events: Arc<Mutex<Vec<RuleProgressEvent>>>,
+    }
+
+    impl ProgressSink for CancellingSink {
+        fn emit(&self, ev: RuleProgressEvent) {
+            if let RuleProgressEvent::Progress { processed, .. } = ev {
+                if processed == 10 {
+                    self.control.cancel();
+                }
+            }
+            self.events.lock().unwrap().push(ev);
+        }
+    }
+
+    #[test]
+    fn run_all_emits_cancelled_after_control_cancelled() {
+        let mut s = MockStore::default();
+        s.messages = (0..50)
+            .map(|idx| mk_msg(&format!("m{idx}"), "acc1", "boss@x.com"))
+            .collect();
+        s.rules = vec![mk_rule("r1", "boss", "ignored", None)];
+        let control = RunControl::new();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink = CancellingSink {
+            control: control.clone(),
+            events: events.clone(),
+        };
+
+        let stats = run_all_rules(&s, Some(&sink), Some(&control)).unwrap();
+
+        assert!(stats.total == 50);
+        assert!(stats.matched < 50);
+        let recorded = events.lock().unwrap();
+        assert!(matches!(
+            recorded.first(),
+            Some(RuleProgressEvent::Started { total: 50 })
+        ));
+        assert!(matches!(
+            recorded.last(),
+            Some(RuleProgressEvent::Cancelled { processed: 10, .. })
+        ));
     }
 }

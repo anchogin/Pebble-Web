@@ -473,7 +473,7 @@ fn is_missing_imap_mailbox_error(error: &PebbleError) -> bool {
 }
 
 fn should_attempt_imap_remote_folder(folder: &pebble_core::Folder) -> bool {
-    !folder.remote_id.starts_with("__local_")
+    folder.server_linked
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -941,6 +941,7 @@ impl SyncWorker {
                 parent_id: None,
                 color: None,
                 is_system: true,
+                server_linked: false,
                 sort_order: 3,
             };
             let _ = self.base.store.insert_folder(&archive);
@@ -2876,10 +2877,21 @@ mod tests {
             parent_id: None,
             color: None,
             is_system: true,
+            server_linked: false,
             sort_order: 3,
         };
 
         assert!(!should_attempt_imap_remote_folder(&folder));
+    }
+
+    #[test]
+    fn imap_local_rule_folder_sync_depends_on_server_link() {
+        let mut folder = test_folder(None, "local-DMIT");
+        folder.server_linked = false;
+        assert!(!should_attempt_imap_remote_folder(&folder));
+
+        folder.server_linked = true;
+        assert!(should_attempt_imap_remote_folder(&folder));
     }
 
     fn test_folder(role: Option<pebble_core::FolderRole>, remote_id: &str) -> pebble_core::Folder {
@@ -2893,6 +2905,7 @@ mod tests {
             parent_id: None,
             color: None,
             is_system: true,
+            server_linked: true,
             sort_order: 0,
         }
     }
@@ -2916,7 +2929,8 @@ mod tests {
         let sent = test_folder(Some(pebble_core::FolderRole::Sent), "Sent");
         let spam = test_folder(Some(pebble_core::FolderRole::Spam), "Spam");
         let custom = test_folder(None, "Newsletters");
-        let local = test_folder(Some(pebble_core::FolderRole::Archive), "__local_archive__");
+        let mut local = test_folder(Some(pebble_core::FolderRole::Archive), "__local_archive__");
+        local.server_linked = false;
 
         assert!(should_poll_imap_folder_for_scope(
             &inbox,

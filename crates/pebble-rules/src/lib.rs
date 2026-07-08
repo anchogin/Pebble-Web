@@ -5,17 +5,19 @@
 //! engine crate stays free of SQLite/HTTP/sync coupling and is unit-testable
 //! with mock stores.
 
-pub mod model;
-pub mod matcher;
+pub mod cancel;
 pub mod executor;
+pub mod matcher;
+pub mod model;
 pub mod runner;
 
-pub use model::{ActionType, ConditionField, ConditionOp, RuleAction, RuleCondition};
-pub use matcher::evaluate;
+pub use cancel::RunControl;
 pub use executor::{apply_actions, ActionOutcome};
+pub use matcher::evaluate;
+pub use model::{ActionType, ConditionField, ConditionOp, RuleAction, RuleCondition};
 pub use runner::{
-    run_all_rules, run_single_rule, run_rules_for_new_message, ProgressSink, RunStats,
-    RuleProgressEvent,
+    run_all_rules, run_rules_for_new_message, run_single_rule, ProgressSink, RuleProgressEvent,
+    RunStats,
 };
 
 use pebble_core::{Folder, FolderRole, KanbanCard, Message, Result, Rule};
@@ -34,7 +36,7 @@ pub trait RuleStore {
     fn list_message_ids_for_account(&self, account_id: &str) -> Result<Vec<String>>;
 
     fn add_label(&self, message_id: &str, label_name: &str) -> Result<()>;
-    fn move_message_to_folder(&self, message_id: &str, folder_id: &str) -> Result<()>;
+    fn bind_message_to_folder(&self, message_id: &str, folder_id: &str) -> Result<()>;
     fn update_message_flags(
         &self,
         id: &str,

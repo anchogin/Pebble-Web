@@ -67,10 +67,6 @@ impl Config {
         self.data_dir.join("pebble.db")
     }
 
-    pub fn index_dir(&self) -> PathBuf {
-        self.data_dir.join("index")
-    }
-
     pub fn attachments_dir(&self) -> PathBuf {
         self.data_dir.join("attachments")
     }

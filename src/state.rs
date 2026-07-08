@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::sync::SyncManager;
 use pebble_crypto::CryptoService;
-use pebble_search::TantivySearch;
+use pebble_rules::RunControl;
 use pebble_store::Store;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -9,6 +9,18 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
 
 pub type AppStateRef = Arc<AppState>;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum RuleRunKey {
+    Single(String),
+    All,
+}
+
+#[derive(Debug, Clone)]
+pub struct ActiveRuleRun {
+    pub run_id: String,
+    pub control: Arc<RunControl>,
+}
 
 #[derive(Debug, Clone)]
 pub enum OAuthSessionResult {
@@ -26,12 +38,12 @@ pub struct OAuthSession {
 pub struct AppState {
     pub config: Config,
     pub store: Arc<Store>,
-    pub search: Arc<TantivySearch>,
     pub crypto: Arc<CryptoService>,
     pub attachments_dir: PathBuf,
     pub sync_manager: Arc<SyncManager>,
     pub ws_broadcast: broadcast::Sender<String>,
     pub oauth_sessions: Arc<Mutex<HashMap<String, OAuthSession>>>,
+    pub rule_runs: Arc<Mutex<HashMap<RuleRunKey, ActiveRuleRun>>>,
 }
 
 impl AppState {
@@ -41,11 +53,8 @@ impl AppState {
         std::fs::create_dir_all(config.attachments_dir())
             .map_err(|e| format!("Failed to create attachments dir: {e}"))?;
 
-        let store = Store::open(&config.db_path())
-            .map_err(|e| format!("Failed to open store: {e}"))?;
-
-        let search = TantivySearch::open(&config.index_dir())
-            .map_err(|e| format!("Failed to open search index: {e}"))?;
+        let store =
+            Store::open(&config.db_path()).map_err(|e| format!("Failed to open store: {e}"))?;
 
         let key_file = config.key_file_path();
         let crypto = CryptoService::init(Some(&key_file))
@@ -69,12 +78,12 @@ impl AppState {
         Ok(Self {
             config,
             store,
-            search: Arc::new(search),
             crypto,
             attachments_dir,
             sync_manager,
             ws_broadcast,
             oauth_sessions: Arc::new(Mutex::new(HashMap::new())),
+            rule_runs: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 }

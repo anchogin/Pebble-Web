@@ -31,6 +31,7 @@ export interface Folder {
   id: string;
   account_id: string;
   remote_id: string;
+  server_linked: boolean;
   name: string;
   folder_type: "folder" | "label" | "category";
   role: "inbox" | "sent" | "drafts" | "trash" | "archive" | "spam" | null;

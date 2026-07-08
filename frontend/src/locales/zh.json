@@ -25,7 +25,8 @@
     "closeNotification": "关闭通知",
     "undo": "撤销",
     "confirm": "确认",
-    "send": "发送"
+    "send": "发送",
+    "create": "创建"
   },
   "tray": {
     "show": "显示窗口",
@@ -49,7 +50,20 @@
     "search": "搜索",
     "mailFolders": "邮件文件夹",
     "tools": "工具",
-    "allAccounts": "全部邮箱"
+    "allAccounts": "全部邮箱",
+    "folderActions": "目录操作",
+    "createFolder": "创建目录",
+    "renameFolderAction": "重命名",
+    "linkFolderAction": "链接",
+    "unlinkFolderAction": "断开链接",
+    "deleteFolderAction": "删除",
+    "serverSync": "服务器同步",
+    "localOnly": "仅本地",
+    "selectAccountBeforeCreateFolder": "创建目录前请先选择一个邮箱账户。",
+    "createFolderPrompt": "目录名称",
+    "renameFolderPrompt": "重命名目录",
+    "deleteFolder": "删除目录",
+    "deleteFolderConfirm": "确定删除“{{name}}”吗？邮件会保留在原邮箱中。"
   },
   "inbox": {
     "searchPlaceholder": "搜索邮件...",
@@ -592,7 +606,9 @@
     "progressActions": "动作",
     "progressErrors": "错误",
     "progressComplete": "完成，匹配 {{matched}} 封邮件，应用 {{applied}} 个动作",
+    "progressCancelled": "执行已取消",
     "progressUnknownError": "未知错误",
+    "progressWsUnavailable": "WebSocket 连接不可用，请刷新后重试。",
     "field_from": "发件人",
     "field_to": "收件人",
     "field_subject": "主题",

@@ -83,9 +83,8 @@ async fn wait_for_outlook_policy_delay(
 }
 
 fn should_sync_outlook_folder(folder: &Folder) -> bool {
-    folder.role.is_some()
-        || folder.remote_id.starts_with("__local_")
-        || !should_hide_outlook_folder(Some(&folder.name), None)
+    folder.server_linked
+        && (folder.role.is_some() || !should_hide_outlook_folder(Some(&folder.name), None))
 }
 
 async fn collect_outlook_delta_pages<F, Fut>(
@@ -746,6 +745,7 @@ mod tests {
             parent_id: None,
             color: None,
             is_system: true,
+            server_linked: true,
             sort_order: 0,
         }
     }

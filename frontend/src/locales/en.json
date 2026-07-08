@@ -25,7 +25,8 @@
     "closeNotification": "Close notification",
     "undo": "Undo",
     "confirm": "Confirm",
-    "send": "Send"
+    "send": "Send",
+    "create": "Create"
   },
   "tray": {
     "show": "Show Window",
@@ -49,7 +50,20 @@
     "search": "Search",
     "mailFolders": "Mail folders",
     "tools": "Tools",
-    "allAccounts": "All accounts"
+    "allAccounts": "All accounts",
+    "folderActions": "Folder actions",
+    "createFolder": "Create folder",
+    "renameFolderAction": "Rename",
+    "linkFolderAction": "Link",
+    "unlinkFolderAction": "Unlink",
+    "deleteFolderAction": "Delete",
+    "serverSync": "Server sync",
+    "localOnly": "Local only",
+    "selectAccountBeforeCreateFolder": "Select an account before creating a folder.",
+    "createFolderPrompt": "Folder name",
+    "renameFolderPrompt": "Rename folder",
+    "deleteFolder": "Delete folder",
+    "deleteFolderConfirm": "Delete {{name}}? Messages stay in their mailboxes."
   },
   "inbox": {
     "searchPlaceholder": "Search messages...",
@@ -592,7 +606,9 @@
     "progressActions": "Actions",
     "progressErrors": "Errors",
     "progressComplete": "Done, matched {{matched}} messages, applied {{applied}} actions",
+    "progressCancelled": "Execution cancelled",
     "progressUnknownError": "Unknown error",
+    "progressWsUnavailable": "WebSocket connection unavailable. Please refresh and try again.",
     "field_from": "From",
     "field_to": "To",
     "field_subject": "Subject",

@@ -417,6 +417,7 @@ mod folder_sync_state_tests {
             parent_id: None,
             color: None,
             is_system: true,
+            server_linked: true,
             sort_order,
         }
     }

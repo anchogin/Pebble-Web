@@ -85,11 +85,12 @@ pub async fn save_draft(
                 parent_id: None,
                 color: None,
                 is_system: true,
+                server_linked: false,
                 sort_order: 2,
             };
             conn.execute(
-                "INSERT INTO folders (id, account_id, remote_id, name, folder_type, role, parent_id, color, is_system, sort_order)
-                 VALUES (?1, ?2, ?3, ?4, 'folder', 'drafts', NULL, NULL, 1, ?5)",
+                "INSERT INTO folders (id, account_id, remote_id, name, folder_type, role, parent_id, color, is_system, server_linked, sort_order)
+                 VALUES (?1, ?2, ?3, ?4, 'folder', 'drafts', NULL, NULL, 1, 0, ?5)",
                 rusqlite::params![folder.id, folder.account_id, folder.remote_id, folder.name, folder.sort_order],
             )?;
             Ok(folder.id)

@@ -56,7 +56,7 @@ fn build_sync_label_ids(folders: &[Folder]) -> Vec<String> {
     let mut visible: Vec<&Folder> = folders
         .iter()
         .filter(|folder| {
-            !folder.remote_id.starts_with("__local_")
+            folder.server_linked
                 && !visible_label_ids(std::slice::from_ref(&folder.remote_id)).is_empty()
         })
         .collect();
@@ -392,6 +392,7 @@ impl GmailSyncWorker {
                 parent_id: None,
                 color: None,
                 is_system: true,
+                server_linked: false,
                 sort_order: 3,
             };
             let _ = self.base.store.insert_folder(&archive);
@@ -1051,6 +1052,7 @@ mod tests {
                 parent_id: None,
                 color: None,
                 is_system: true,
+                server_linked: true,
                 sort_order: 0,
             },
             Folder {
@@ -1063,6 +1065,7 @@ mod tests {
                 parent_id: None,
                 color: None,
                 is_system: true,
+                server_linked: true,
                 sort_order: 1,
             },
             Folder {
@@ -1075,6 +1078,7 @@ mod tests {
                 parent_id: None,
                 color: None,
                 is_system: false,
+                server_linked: true,
                 sort_order: 5,
             },
             Folder {
@@ -1087,6 +1091,7 @@ mod tests {
                 parent_id: None,
                 color: None,
                 is_system: true,
+                server_linked: true,
                 sort_order: 6,
             },
             Folder {
@@ -1099,6 +1104,7 @@ mod tests {
                 parent_id: None,
                 color: None,
                 is_system: true,
+                server_linked: false,
                 sort_order: 7,
             },
         ];

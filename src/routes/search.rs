@@ -18,11 +18,23 @@ pub struct SearchRequest {
     pub limit: Option<usize>,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_request_accepts_camel_case_date_from() {
+        let body: SearchRequest = serde_json::from_str(r#"{"dateFrom":1722700800}"#).unwrap();
+
+        assert_eq!(body.date_from, Some(1_722_700_800));
+        assert_eq!(body.date_to, None);
+    }
+}
+
 pub async fn search_messages(
     State(state): State<AppStateRef>,
     Json(body): Json<SearchRequest>,
 ) -> Result<Json<Vec<SearchHit>>, ApiError> {
-    let search = state.search.clone();
     let limit = body.limit.unwrap_or(50);
 
     // Determine if this is a simple search or advanced
@@ -35,40 +47,28 @@ pub async fn search_messages(
         || body.folder_id.is_some();
 
     let hits = if is_advanced {
-        let text = body.query.clone();
-        let from = body.from.clone();
-        let to = body.to.clone();
-        let subject = body.subject.clone();
-        let date_from = body.date_from;
-        let date_to = body.date_to;
-        let has_attachment = body.has_attachment;
-        let folder_id = body.folder_id.clone();
-
-        tokio::task::spawn_blocking(move || {
-            use pebble_search::AdvancedSearchParams;
-            search.advanced_search(AdvancedSearchParams {
-                text: text.as_deref(),
-                from: from.as_deref(),
-                to: to.as_deref(),
-                subject: subject.as_deref(),
-                date_from,
-                date_to,
-                has_attachment,
-                folder_id: folder_id.as_deref(),
+        state
+            .store
+            .advanced_search_messages(
+                body.query.as_deref(),
+                body.from.as_deref(),
+                body.to.as_deref(),
+                body.subject.as_deref(),
+                body.date_from,
+                body.date_to,
+                body.has_attachment,
+                body.folder_id.as_deref(),
                 limit,
-            })
-        })
-        .await
-        .map_err(|e| ApiError::Internal(format!("Search task failed: {e}")))?
-        .map_err(|e| ApiError::Internal(format!("Search failed: {e}")))?
+            )
+            .map_err(|e| ApiError::Internal(format!("Search failed: {e}")))?
     } else {
         let query_text = body.query.unwrap_or_default();
         if query_text.is_empty() {
             return Ok(Json(Vec::new()));
         }
-        tokio::task::spawn_blocking(move || search.search(&query_text, limit))
-            .await
-            .map_err(|e| ApiError::Internal(format!("Search task failed: {e}")))?
+        state
+            .store
+            .search_messages_wide(&query_text, limit)
             .map_err(|e| ApiError::Internal(format!("Search failed: {e}")))?
     };
 

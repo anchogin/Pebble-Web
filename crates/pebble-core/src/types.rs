@@ -54,6 +54,7 @@ pub struct Folder {
     pub parent_id: Option<String>,
     pub color: Option<String>,
     pub is_system: bool,
+    pub server_linked: bool,
     pub sort_order: i32,
 }
 

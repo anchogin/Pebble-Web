@@ -1226,6 +1226,7 @@ fn graph_folder_to_folder(gf: &GraphFolder, account_id: &str) -> Folder {
         parent_id: None,
         color: None,
         is_system,
+        server_linked: true,
         sort_order,
     }
 }

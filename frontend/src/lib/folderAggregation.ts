@@ -51,6 +51,7 @@ export function buildAllAccountsFolders(folders: Folder[]): Folder[] {
       parent_id: null,
       color: null,
       is_system: true,
+      server_linked: true,
       sort_order: index,
     }));
 
