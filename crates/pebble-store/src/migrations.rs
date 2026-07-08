@@ -510,9 +510,7 @@ CREATE TABLE IF NOT EXISTS translate_config (
 mod tests {
     use super::*;
 
-    #[test]
-    fn migration_v11_adds_account_color_and_sets_schema_version() {
-        let conn = Connection::open_in_memory().unwrap();
+    fn create_minimal_v10_schema(conn: &Connection) {
         conn.execute_batch(
             "CREATE TABLE accounts (
                 id TEXT PRIMARY KEY,
@@ -522,37 +520,69 @@ mod tests {
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             );
+            CREATE TABLE labels (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                color TEXT NOT NULL DEFAULT '#808080',
+                is_system INTEGER NOT NULL DEFAULT 0,
+                rule_id TEXT
+            );
+            CREATE TABLE rules (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                priority INTEGER NOT NULL DEFAULT 0,
+                conditions TEXT NOT NULL DEFAULT '{}',
+                actions TEXT NOT NULL DEFAULT '[]',
+                is_enabled INTEGER NOT NULL DEFAULT 1,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            CREATE TABLE folders (
+                id TEXT PRIMARY KEY,
+                account_id TEXT NOT NULL,
+                remote_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                folder_type TEXT NOT NULL DEFAULT 'folder',
+                role TEXT,
+                parent_id TEXT,
+                color TEXT,
+                is_system INTEGER NOT NULL DEFAULT 0,
+                sort_order INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE message_folders (
+                message_id TEXT NOT NULL,
+                folder_id TEXT NOT NULL,
+                PRIMARY KEY (message_id, folder_id)
+            );
             PRAGMA user_version = 10;",
         )
         .unwrap();
+    }
+
+    #[test]
+    fn migration_from_v10_adds_account_color_and_sets_schema_version() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_minimal_v10_schema(&conn);
 
         run_migrations(&conn).unwrap();
 
         let version: u32 = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 11);
+        assert_eq!(version, CURRENT_VERSION);
         conn.prepare("SELECT color FROM accounts LIMIT 0")
             .expect("accounts.color should exist after V11");
     }
 
     #[test]
-    fn migration_v11_backfills_existing_account_colors() {
+    fn migration_from_v10_backfills_existing_account_colors() {
         let conn = Connection::open_in_memory().unwrap();
+        create_minimal_v10_schema(&conn);
         conn.execute_batch(
-            "CREATE TABLE accounts (
-                id TEXT PRIMARY KEY,
-                email TEXT NOT NULL,
-                display_name TEXT NOT NULL DEFAULT '',
-                provider TEXT NOT NULL,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
-            );
-            INSERT INTO accounts (id, email, display_name, provider, created_at, updated_at)
+            "INSERT INTO accounts (id, email, display_name, provider, created_at, updated_at)
             VALUES
                 ('account-1', 'one@example.com', 'One', 'gmail', 1, 1),
-                ('account-2', 'two@example.com', 'Two', 'gmail', 2, 2);
-            PRAGMA user_version = 10;",
+                ('account-2', 'two@example.com', 'Two', 'gmail', 2, 2);",
         )
         .unwrap();
 
@@ -573,7 +603,7 @@ mod tests {
     }
 
     #[test]
-    fn migration_v13_adds_rules_account_id_and_sets_schema_version() {
+    fn migration_from_v12_adds_rules_account_id_and_sets_schema_version() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE accounts (
@@ -585,6 +615,18 @@ mod tests {
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             );
+            CREATE TABLE folders (
+                id TEXT PRIMARY KEY,
+                account_id TEXT NOT NULL,
+                remote_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                folder_type TEXT NOT NULL DEFAULT 'folder',
+                role TEXT,
+                parent_id TEXT,
+                color TEXT,
+                is_system INTEGER NOT NULL DEFAULT 0,
+                sort_order INTEGER NOT NULL DEFAULT 0
+            );
             CREATE TABLE rules (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -594,6 +636,11 @@ mod tests {
                 is_enabled INTEGER NOT NULL DEFAULT 1,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
+            );
+            CREATE TABLE message_folders (
+                message_id TEXT NOT NULL,
+                folder_id TEXT NOT NULL,
+                PRIMARY KEY (message_id, folder_id)
             );
             INSERT INTO rules (id, name, priority, conditions, actions, is_enabled, created_at, updated_at)
             VALUES ('r1', 'old rule', 5, '{}', '[]', 1, 1, 1);
@@ -611,7 +658,7 @@ mod tests {
         let version: u32 = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 13);
+        assert_eq!(version, CURRENT_VERSION);
         assert_eq!(account_id, None);
     }
 
