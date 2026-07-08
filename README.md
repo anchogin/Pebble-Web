@@ -134,6 +134,10 @@ npm run dev
 | `PEBBLE_STATIC_DIR` | 否 | `./frontend/dist` | 前端静态文件目录 |
 | `PEBBLE_SYNC_INTERVAL` | 否 | `300` | 邮件同步间隔，单位秒 |
 | `PEBBLE_ENCRYPTION_KEY` | 否 | 自动生成 | 32 字节 Hex 编码加密密钥 |
+| `PEBBLE_LOG_RETAIN_DAYS` | 否 | `1` | 日志保留天数 |
+| `GOOGLE_CLIENT_ID` | 否 | 无 | 谷歌Auth登录客户端ID |
+| `GOOGLE_CLIENT_SECRET` | 否 | 无 | 谷歌Auth登录客户端密钥 |
+| `PEBBLE_PUBLIC_URL` | 否 | 无 | Pebble服务器回调地址 |
 
 安全建议：
 
