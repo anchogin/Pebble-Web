@@ -1,18 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CirclePlus, Play, Plus, Pencil, Trash2, ShieldCheck, X } from "lucide-react";
-import { useAccountsQuery } from "@/hooks/queries";
+import { useAccountsQuery, useFoldersForAccountsQuery } from "@/hooks/queries";
 import {
-  createFolder,
   createLabel,
   createRule,
   deleteRule,
   executeRule,
-  listFolders,
   listLabels,
   listRules,
   updateRule,
-  type Folder,
   type Label,
   type Rule,
 } from "@/lib/api";
@@ -102,6 +99,12 @@ function buildRuleFormFromSelection(text: string, name: string): RuleFormData {
 export default function RulesTab() {
   const { t } = useTranslation();
   const { data: accounts = [] } = useAccountsQuery();
+  const accountIds = accounts.map((account) => account.id);
+  const { data: folders = [] } = useFoldersForAccountsQuery(accountIds);
+  const folderNames = useMemo(
+    () => [...new Set(folders.map((folder) => folder.name))].sort((a, b) => a.localeCompare(b)),
+    [folders],
+  );
   const addToast = useToastStore((s) => s.addToast);
   const pendingRuleDraftText = useUIStore((s) => s.pendingRuleDraftText);
   const setPendingRuleDraftText = useUIStore((s) => s.setPendingRuleDraftText);
@@ -109,7 +112,6 @@ export default function RulesTab() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<RuleFormData>(emptyForm);
   const [labels, setLabels] = useState<Label[]>([]);
-  const [folders, setFolders] = useState<Folder[]>([]);
   const [creatingAction, setCreatingAction] = useState<{ index: number; kind: "label" | "folder"; value: string } | null>(null);
   const [execDialog, setExecDialog] = useState<{ ruleId: string | null; runId: string; ruleName: string } | null>(null);
   const pendingExecutionsRef = useRef<Set<string>>(new Set());
@@ -139,20 +141,6 @@ export default function RulesTab() {
         console.error("Failed to fetch labels:", err);
       });
   }, []);
-
-  useEffect(() => {
-    if (!form.account_id) {
-      setFolders([]);
-      return;
-    }
-
-    listFolders(form.account_id)
-      .then(setFolders)
-      .catch((err) => {
-        console.error("Failed to fetch folders:", err);
-        setFolders([]);
-      });
-  }, [form.account_id]);
 
   useEffect(() => {
     if (!pendingRuleDraftText) return;
@@ -284,12 +272,6 @@ export default function RulesTab() {
       if (creatingAction.kind === "label") {
         await createLabel(name);
         setLabels(await listLabels());
-      } else if (form.account_id) {
-        await createFolder(form.account_id, name);
-        setFolders(await listFolders(form.account_id));
-      } else {
-        setError(t("rules.selectAccountFirst", "先选账户才能选文件夹"));
-        return;
       }
       updateAction(creatingAction.index, { value: name });
       setCreatingAction(null);
@@ -471,14 +453,6 @@ export default function RulesTab() {
                   <option key={c} value={c}>{t(`rules.kanban_${c}`, c)}</option>
                 ))}
               </select>
-            ) : action.type === "MoveToFolder" && !form.account_id ? (
-              <input
-                type="text"
-                disabled
-                aria-label={t("rules.actionValue", "Action value")}
-                placeholder={t("rules.selectAccountFirst", "先选账户才能选文件夹")}
-                style={{ ...inputStyle, flex: 1, opacity: 0.6, cursor: "not-allowed" }}
-              />
             ) : (
               <>
                 <input
@@ -495,7 +469,7 @@ export default function RulesTab() {
                   style={{ ...inputStyle, flex: 1 }}
                 />
                 <datalist id={action.type === "AddLabel" ? "rule-label-options" : "rule-folder-options"}>
-                  {(action.type === "AddLabel" ? labels.map((label) => label.name) : folders.map((folder) => folder.name)).map((name) => (
+                  {(action.type === "AddLabel" ? labels.map((label) => label.name) : folderNames).map((name) => (
                     <option key={name} value={name} />
                   ))}
                 </datalist>
