@@ -1,5 +1,6 @@
 use crate::credentials::{encrypt_credentials, AccountCredentials, GmailCredentials};
 use crate::error::ApiError;
+use crate::magicpush::shared_public_url;
 use crate::state::{AppStateRef, OAuthSession, OAuthSessionResult};
 use axum::{
     extract::{Query, State},
@@ -40,16 +41,46 @@ pub fn google_oauth_manager(config: &crate::config::Config) -> Result<OAuthManag
     ))
 }
 
-fn build_redirect_uri(state: &AppStateRef) -> String {
-    let base = state
-        .config
-        .public_url
-        .as_deref()
-        .unwrap_or("http://localhost:8080");
-    format!("{}/api/v1/oauth/google/callback", base.trim_end_matches('/'))
+fn build_redirect_uri(state: &AppStateRef) -> Result<String, ApiError> {
+    let base = shared_public_url(state.store.as_ref())
+        .map_err(|e| ApiError::Internal(format!("Failed to load app settings: {e}")))?
+        .or_else(|| state.config.public_url.clone())
+        .unwrap_or_else(|| "http://localhost:8080".to_string());
+    Ok(format!(
+        "{}/api/v1/oauth/google/callback",
+        base.trim_end_matches('/')
+    ))
 }
 
-fn set_session_error(sessions: &mut std::collections::HashMap<String, OAuthSession>, id: &str, msg: String) {
+#[cfg(test)]
+mod tests {
+    use super::build_redirect_uri;
+
+    #[test]
+    fn redirect_uri_uses_shared_public_url_before_env_fallback() {
+        let state = crate::routes::magicpush::tests::test_state_ref();
+        state
+            .store
+            .save_app_settings(&pebble_core::AppSettingsRecord {
+                id: "active".to_string(),
+                public_url: "https://general.example.com".to_string(),
+                created_at: 1,
+                updated_at: 1,
+            })
+            .unwrap();
+
+        assert_eq!(
+            build_redirect_uri(&state).unwrap(),
+            "https://general.example.com/api/v1/oauth/google/callback"
+        );
+    }
+}
+
+fn set_session_error(
+    sessions: &mut std::collections::HashMap<String, OAuthSession>,
+    id: &str,
+    msg: String,
+) {
     sessions.insert(
         id.to_string(),
         OAuthSession {
@@ -69,7 +100,7 @@ pub struct StartOAuthResponse {
 pub async fn start_google_oauth(
     State(state): State<AppStateRef>,
 ) -> Result<Json<StartOAuthResponse>, ApiError> {
-    let redirect_uri = build_redirect_uri(&state);
+    let redirect_uri = build_redirect_uri(&state)?;
     let manager = google_oauth_manager(&state.config)?;
     let session_id = new_id();
 
@@ -87,8 +118,14 @@ pub async fn start_google_oauth(
         },
     );
 
-    info!("Google OAuth session started: {}, redirect_uri: {}, auth_url: {}", session_id, redirect_uri, auth_url);
-    Ok(Json(StartOAuthResponse { session_id, auth_url }))
+    info!(
+        "Google OAuth session started: {}, redirect_uri: {}, auth_url: {}",
+        session_id, redirect_uri, auth_url
+    );
+    Ok(Json(StartOAuthResponse {
+        session_id,
+        auth_url,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -102,7 +139,8 @@ pub async fn google_oauth_callback(
     State(app_state): State<AppStateRef>,
     Query(params): Query<CallbackParams>,
 ) -> impl IntoResponse {
-    info!("Google OAuth callback received: code={:?}, state={:?}, error={:?}",
+    info!(
+        "Google OAuth callback received: code={:?}, state={:?}, error={:?}",
         params.code.as_deref().map(|c| &c[..c.len().min(10)]),
         params.state,
         params.error
@@ -114,7 +152,11 @@ pub async fn google_oauth_callback(
 
     if let Some(err) = params.error {
         let mut sessions = app_state.oauth_sessions.lock().await;
-        set_session_error(&mut sessions, &session_id, format!("Google denied access: {err}"));
+        set_session_error(
+            &mut sessions,
+            &session_id,
+            format!("Google denied access: {err}"),
+        );
         return Html(error_page(&format!("Google denied access: {err}"))).into_response();
     }
 
@@ -122,7 +164,11 @@ pub async fn google_oauth_callback(
         Some(c) => c,
         None => {
             let mut sessions = app_state.oauth_sessions.lock().await;
-            set_session_error(&mut sessions, &session_id, "No authorization code received".into());
+            set_session_error(
+                &mut sessions,
+                &session_id,
+                "No authorization code received".into(),
+            );
             return Html(error_page("No authorization code received")).into_response();
         }
     };
@@ -138,7 +184,15 @@ pub async fn google_oauth_callback(
         }
     };
 
-    let redirect_uri = build_redirect_uri(&app_state);
+    let redirect_uri = match build_redirect_uri(&app_state) {
+        Ok(uri) => uri,
+        Err(e) => {
+            let msg = format!("Config error: {e}");
+            let mut sessions = app_state.oauth_sessions.lock().await;
+            set_session_error(&mut sessions, &session_id, msg.clone());
+            return Html(error_page(&msg)).into_response();
+        }
+    };
     let manager = match google_oauth_manager(&app_state.config) {
         Ok(m) => m,
         Err(e) => {

@@ -94,6 +94,23 @@ export async function pollGoogleOAuth(sessionId: string): Promise<OAuthStatus> {
   return res.data;
 }
 
+export interface GeneralSettingsResponse {
+  publicUrl: string;
+}
+
+export interface SaveGeneralSettingsRequest {
+  publicUrl: string;
+}
+
+export async function getGeneralSettings(): Promise<GeneralSettingsResponse> {
+  const res = await api.get<GeneralSettingsResponse>("/settings/general");
+  return res.data;
+}
+
+export async function saveGeneralSettings(request: SaveGeneralSettingsRequest): Promise<void> {
+  await api.post("/settings/general", request);
+}
+
 export async function readAppLog(_maxBytes: number): Promise<AppLogSnapshot> {
   // Not implemented in web backend
   return { path: "", content: "", truncated: false };
@@ -227,6 +244,7 @@ export async function updateAccount(
   accountId: string,
   email: string,
   displayName: string,
+  username?: string,
   password?: string,
   imapHost?: string,
   imapPort?: number,
@@ -242,6 +260,7 @@ export async function updateAccount(
     email,
     displayName,
     color: accountColor,
+    username: username || undefined,
     password: password || undefined,
     imapHost,
     imapPort,
@@ -718,6 +737,32 @@ export async function saveTranslateConfig(providerType: string, config: string, 
 export async function testTranslateConnection(config: string): Promise<string> {
   const res = await api.post<{ ok: boolean; result: string }>("/translate/test", { providerType: "test", config, isEnabled: true });
   return res.data.result;
+}
+
+export interface MagicPushConfigResponse {
+  enabled: boolean;
+  baseUrl: string;
+  hasToken: boolean;
+}
+
+export interface SaveMagicPushConfigRequest {
+  enabled: boolean;
+  baseUrl: string;
+  token?: string | null;
+  clearToken?: boolean;
+}
+
+export async function getMagicPushConfig(): Promise<MagicPushConfigResponse> {
+  const res = await api.get<MagicPushConfigResponse>("/magicpush/config");
+  return res.data;
+}
+
+export async function saveMagicPushConfig(request: SaveMagicPushConfigRequest): Promise<void> {
+  await api.post("/magicpush/config", request);
+}
+
+export async function testMagicPushConfig(request: SaveMagicPushConfigRequest): Promise<void> {
+  await api.post("/magicpush/test", request);
 }
 
 // ─── Thread API ──────────────────────────────────────────────────────────────

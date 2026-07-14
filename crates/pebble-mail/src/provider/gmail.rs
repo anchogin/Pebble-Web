@@ -1,21 +1,24 @@
 use std::sync::RwLock;
 
+use crate::sync::SyncLogEntry;
 use async_trait::async_trait;
 use base64::{engine::general_purpose, Engine as _};
-use tokio::sync::mpsc;
-use crate::sync::SyncLogEntry;
-use reqwest::Client;
-use serde::{Deserialize, Serialize};
-use tracing::{debug, warn};
 use chrono::Utc;
 use mailparse;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
+use tracing::{debug, warn};
 
 use super::http_client_with_proxy;
 use crate::parser::{AttachmentData, AttachmentMeta};
-use pebble_core::traits::{AuthCredentials, ChangeSet, DraftProvider, FolderProvider, MailProvider, MailTransport, OutgoingMessage, SyncCursor, FetchQuery, FetchResult};
+use pebble_core::traits::{
+    AuthCredentials, ChangeSet, DraftProvider, FetchQuery, FetchResult, FolderProvider,
+    MailProvider, MailTransport, OutgoingMessage, SyncCursor,
+};
 use pebble_core::{
-    new_id, now_timestamp, DraftMessage, EmailAddress, Folder, FolderRole, FolderType, HttpProxyConfig, Message,
-    PebbleError, ProviderCapabilities, Result,
+    new_id, now_timestamp, DraftMessage, EmailAddress, Folder, FolderRole, FolderType,
+    HttpProxyConfig, Message, PebbleError, ProviderCapabilities, Result,
 };
 
 const GMAIL_API_BASE: &str = "https://www.googleapis.com/gmail/v1/users/me";
@@ -152,7 +155,9 @@ pub fn visible_label_ids(label_ids: &[impl AsRef<str>]) -> Vec<String> {
         .iter()
         .filter_map(|id| {
             let id = id.as_ref();
-            if id.starts_with("CATEGORY_") || matches!(id, "IMPORTANT" | "STARRED" | "UNREAD" | "CHAT") {
+            if id.starts_with("CATEGORY_")
+                || matches!(id, "IMPORTANT" | "STARRED" | "UNREAD" | "CHAT")
+            {
                 None
             } else {
                 Some(id.to_string())
@@ -332,9 +337,10 @@ impl GmailProvider {
             history_id: String,
         }
 
-        let profile: ProfileResponse = resp.json().await.map_err(|e| {
-            PebbleError::Network(format!("Failed to parse profile response: {e}"))
-        })?;
+        let profile: ProfileResponse = resp
+            .json()
+            .await
+            .map_err(|e| PebbleError::Network(format!("Failed to parse profile response: {e}")))?;
 
         Ok((profile.email_address, profile.history_id))
     }
@@ -345,9 +351,7 @@ impl GmailProvider {
         limit: u32,
         page_token: Option<&str>,
     ) -> Result<(Vec<GmailMessageRef>, Option<String>)> {
-        let mut url = format!(
-            "{GMAIL_API_BASE}/messages?labelIds={label_id}&maxResults={limit}"
-        );
+        let mut url = format!("{GMAIL_API_BASE}/messages?labelIds={label_id}&maxResults={limit}");
         if let Some(token) = page_token {
             url.push_str(&format!("&pageToken={token}"));
         }
@@ -361,9 +365,10 @@ impl GmailProvider {
             )));
         }
 
-        let list: GmailMessageList = resp.json().await.map_err(|e| {
-            PebbleError::Network(format!("Failed to parse message list: {e}"))
-        })?;
+        let list: GmailMessageList = resp
+            .json()
+            .await
+            .map_err(|e| PebbleError::Network(format!("Failed to parse message list: {e}")))?;
 
         Ok((list.messages.unwrap_or_default(), list.next_page_token))
     }
@@ -374,7 +379,8 @@ impl GmailProvider {
         account_id: &str,
     ) -> Result<GmailFetchedMessage> {
         let gmail_message = self.fetch_full_gmail_message(gmail_id).await?;
-        let (message, attachments, remote_label_ids) = self.parse_gmail_message(gmail_message, account_id).await?;
+        let (message, attachments, remote_label_ids) =
+            self.parse_gmail_message(gmail_message, account_id).await?;
 
         let visible_label_ids = visible_label_ids(&remote_label_ids);
 
@@ -403,7 +409,9 @@ impl GmailProvider {
             .unwrap_or_default();
 
         let date_str = Self::get_header(headers, "Date").unwrap_or_default();
-        let date = chrono::DateTime::parse_from_rfc2822(date_str).map(|dt| dt.timestamp()).unwrap_or(0);
+        let date = chrono::DateTime::parse_from_rfc2822(date_str)
+            .map(|dt| dt.timestamp())
+            .unwrap_or(0);
 
         let mut body_text = "".to_string();
         let mut body_html = "".to_string();
@@ -471,13 +479,26 @@ impl GmailProvider {
         let mime_type = payload.mime_type.as_deref().unwrap_or("text/plain");
         let has_parts = payload.parts.as_ref().map(|p| p.len()).unwrap_or(0);
         let body_size = payload.body.as_ref().and_then(|b| b.size).unwrap_or(0);
-        let has_data = payload.body.as_ref().and_then(|b| b.data.as_deref()).map(|d| d.len()).unwrap_or(0);
-        tracing::info!("[walk] id={} mime={} parts={} body_size={} has_data={}", gmail_id, mime_type, has_parts, body_size, has_data);
+        let has_data = payload
+            .body
+            .as_ref()
+            .and_then(|b| b.data.as_deref())
+            .map(|d| d.len())
+            .unwrap_or(0);
+        tracing::info!(
+            "[walk] id={} mime={} parts={} body_size={} has_data={}",
+            gmail_id,
+            mime_type,
+            has_parts,
+            body_size,
+            has_data
+        );
 
         if let Some(parts) = &payload.parts {
             if !parts.is_empty() {
                 for part in parts {
-                    Box::pin(self.walk_payload(gmail_id, part, body_text, body_html, attachments)).await?;
+                    Box::pin(self.walk_payload(gmail_id, part, body_text, body_html, attachments))
+                        .await?;
                 }
                 return Ok(());
             }
@@ -498,17 +519,19 @@ impl GmailProvider {
                         "text/plain" if body_text.is_empty() => {
                             *body_text = String::from_utf8(decoded).unwrap_or_default();
                         }
-                        "text/html" if body_html.is_empty() => {
-                            match String::from_utf8(decoded) {
-                                Ok(s) => {
-                                    *body_html = s;
-                                }
-                                Err(e) => {
-                                    tracing::warn!("Gmail message {} text/html UTF-8 decode failed: {}", gmail_id, e);
-                                    *body_html = String::from_utf8_lossy(e.as_bytes()).into_owned();
-                                }
+                        "text/html" if body_html.is_empty() => match String::from_utf8(decoded) {
+                            Ok(s) => {
+                                *body_html = s;
                             }
-                        }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Gmail message {} text/html UTF-8 decode failed: {}",
+                                    gmail_id,
+                                    e
+                                );
+                                *body_html = String::from_utf8_lossy(e.as_bytes()).into_owned();
+                            }
+                        },
                         _ => {}
                     }
                 }
@@ -524,7 +547,10 @@ impl GmailProvider {
 
         if is_attachment {
             if let (Some(attachment_id), Some(filename), Some(body_size)) = (
-                payload.body.as_ref().and_then(|b| b.attachment_id.as_deref()),
+                payload
+                    .body
+                    .as_ref()
+                    .and_then(|b| b.attachment_id.as_deref()),
                 payload.filename.as_deref(),
                 payload.body.as_ref().and_then(|b| b.size),
             ) {
@@ -656,7 +682,8 @@ impl FolderProvider for GmailProvider {
 
     async fn move_message(&self, _message_id: &str, _folder_id: &str) -> Result<String> {
         Err(PebbleError::Internal(
-            "Gmail does not support moving messages between folders. Use labels instead.".to_string(),
+            "Gmail does not support moving messages between folders. Use labels instead."
+                .to_string(),
         ))
     }
 }
@@ -669,15 +696,21 @@ impl MailTransport for GmailProvider {
     }
 
     async fn fetch_messages(&self, _query: &FetchQuery) -> Result<FetchResult> {
-        Err(PebbleError::Internal("fetch_messages is not supported for Gmail. Use the sync worker instead.".to_string()))
+        Err(PebbleError::Internal(
+            "fetch_messages is not supported for Gmail. Use the sync worker instead.".to_string(),
+        ))
     }
 
     async fn send_message(&self, _message: &OutgoingMessage) -> Result<()> {
-        Err(PebbleError::Internal("send_message is not yet implemented for Gmail".to_string()))
+        Err(PebbleError::Internal(
+            "send_message is not yet implemented for Gmail".to_string(),
+        ))
     }
 
     async fn sync_changes(&self, _since: &SyncCursor) -> Result<ChangeSet> {
-        Err(PebbleError::Internal("sync_changes is not supported for Gmail. Use the sync worker instead.".to_string()))
+        Err(PebbleError::Internal(
+            "sync_changes is not supported for Gmail. Use the sync worker instead.".to_string(),
+        ))
     }
 
     fn capabilities(&self) -> ProviderCapabilities {

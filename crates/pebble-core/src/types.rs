@@ -258,6 +258,25 @@ pub struct TranslateConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppSettingsRecord {
+    pub id: String,
+    pub public_url: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MagicPushConfigRecord {
+    pub id: String,
+    pub base_url: String,
+    pub token_encrypted: Option<String>,
+    pub public_url: String,
+    pub is_enabled: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreadSummary {
     pub thread_id: String,
     pub subject: String,

@@ -1,4 +1,6 @@
-use crate::credentials::{decrypt_credentials, encrypt_credentials, AccountCredentials, ImapCredentials, SmtpCredentials};
+use crate::credentials::{
+    decrypt_credentials, encrypt_credentials, AccountCredentials, ImapCredentials, SmtpCredentials,
+};
 use crate::error::ApiError;
 use crate::routes::oauth::{fetch_google_userinfo, google_oauth_manager};
 use crate::state::AppStateRef;
@@ -50,6 +52,8 @@ pub struct AccountConfigResponse {
     pub display_name: String,
     pub color: Option<String>,
     pub provider: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub imap_host: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -108,7 +112,7 @@ pub async fn get_account(
         ProviderType::Outlook => "outlook",
     };
 
-    let (imap_host, imap_port, imap_security, smtp_host, smtp_port, smtp_security) =
+    let (username, imap_host, imap_port, imap_security, smtp_host, smtp_port, smtp_security) =
         if matches!(account.provider, ProviderType::Imap) {
             match state.store.get_account_sync_state(&account.id) {
                 Ok(Some(ss_json)) => {
@@ -123,6 +127,7 @@ pub async fn get_account(
                         .to_string();
                     match decrypt_credentials(&state.crypto, &encrypted_hex) {
                         Ok(AccountCredentials::Imap { imap, smtp }) => (
+                            Some(imap.username),
                             Some(imap.host),
                             Some(imap.port),
                             Some(imap.security),
@@ -130,14 +135,16 @@ pub async fn get_account(
                             Some(smtp.port),
                             Some(smtp.security),
                         ),
-                        Ok(AccountCredentials::Gmail(_)) => (None, None, None, None, None, None),
-                        Err(_) => (None, None, None, None, None, None),
+                        Ok(AccountCredentials::Gmail(_)) => {
+                            (None, None, None, None, None, None, None)
+                        }
+                        Err(_) => (None, None, None, None, None, None, None),
                     }
                 }
-                _ => (None, None, None, None, None, None),
+                _ => (None, None, None, None, None, None, None),
             }
         } else {
-            (None, None, None, None, None, None)
+            (None, None, None, None, None, None, None)
         };
 
     Ok(Json(AccountConfigResponse {
@@ -146,6 +153,7 @@ pub async fn get_account(
         display_name: account.display_name,
         color: account.color,
         provider: provider.to_string(),
+        username,
         imap_host,
         imap_port,
         imap_security,
@@ -333,6 +341,7 @@ pub struct UpdateAccountRequest {
     pub email: Option<String>,
     pub display_name: Option<String>,
     pub color: Option<String>,
+    pub username: Option<String>,
     pub password: Option<String>,
     pub imap_host: Option<String>,
     pub imap_port: Option<u16>,
@@ -374,11 +383,18 @@ pub async fn update_account(
     let aid_param_idx = params.len() + 1;
     params.push(Box::new(aid.clone()));
 
-    let sql = format!("UPDATE accounts SET {} WHERE id = ?{}", sets.join(", "), aid_param_idx);
+    let sql = format!(
+        "UPDATE accounts SET {} WHERE id = ?{}",
+        sets.join(", "),
+        aid_param_idx
+    );
 
     store
         .with_write_async(move |conn| {
-            let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref() as &dyn rusqlite::types::ToSql).collect();
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> = params
+                .iter()
+                .map(|p| p.as_ref() as &dyn rusqlite::types::ToSql)
+                .collect();
             conn.execute(&sql, param_refs.as_slice())?;
             Ok(())
         })
@@ -387,6 +403,7 @@ pub async fn update_account(
 
     // If credential fields changed, update sync_state
     let has_cred_changes = body.password.is_some()
+        || body.username.is_some()
         || body.imap_host.is_some()
         || body.imap_port.is_some()
         || body.smtp_host.is_some()
@@ -428,12 +445,28 @@ pub async fn update_account(
                             imap.password = p.clone();
                             smtp.password = p.clone();
                         }
-                        if let Some(ref h) = body.imap_host { imap.host = h.clone(); }
-                        if let Some(p) = body.imap_port { imap.port = p; }
-                        if let Some(ref s) = body.imap_security { imap.security = s.clone(); }
-                        if let Some(ref h) = body.smtp_host { smtp.host = h.clone(); }
-                        if let Some(p) = body.smtp_port { smtp.port = p; }
-                        if let Some(ref s) = body.smtp_security { smtp.security = s.clone(); }
+                        if let Some(ref username) = body.username {
+                            imap.username = username.clone();
+                            smtp.username = username.clone();
+                        }
+                        if let Some(ref h) = body.imap_host {
+                            imap.host = h.clone();
+                        }
+                        if let Some(p) = body.imap_port {
+                            imap.port = p;
+                        }
+                        if let Some(ref s) = body.imap_security {
+                            imap.security = s.clone();
+                        }
+                        if let Some(ref h) = body.smtp_host {
+                            smtp.host = h.clone();
+                        }
+                        if let Some(p) = body.smtp_port {
+                            smtp.port = p;
+                        }
+                        if let Some(ref s) = body.smtp_security {
+                            smtp.security = s.clone();
+                        }
                     }
                     AccountCredentials::Gmail(_) => {
                         // Gmail credentials are not updated here.
@@ -450,14 +483,20 @@ pub async fn update_account(
                         conn.execute(
                             "UPDATE accounts SET sync_state = ?1 WHERE id = ?2",
                             rusqlite::params![
-                                serde_json::json!({ "credentials": encrypted }).to_string(),
+                                {
+                                    let mut updated = sync_state;
+                                    updated["credentials"] = serde_json::Value::String(encrypted);
+                                    updated.to_string()
+                                },
                                 aid3,
                             ],
                         )?;
                         Ok(())
                     })
                     .await
-                    .map_err(|e| ApiError::Internal(format!("Failed to update credentials: {e}")))?;
+                    .map_err(|e| {
+                        ApiError::Internal(format!("Failed to update credentials: {e}"))
+                    })?;
 
                 // Restart sync worker with new credentials
                 let sync_manager = state.sync_manager.clone();
@@ -516,13 +555,12 @@ pub async fn test_account_connection(
         .map_err(|e| ApiError::Internal(format!("DB error: {e}")))?
         .ok_or_else(|| ApiError::NotFound("Account sync state not found".to_string()))?;
 
-    let encrypted_hex =
-        serde_json::from_str::<serde_json::Value>(&ss_json)
-            .map_err(|_| ApiError::Internal("Invalid sync state JSON".to_string()))?
-            .get("credentials")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ApiError::BadRequest("No credentials in account".to_string()))?
-            .to_string();
+    let encrypted_hex = serde_json::from_str::<serde_json::Value>(&ss_json)
+        .map_err(|_| ApiError::Internal("Invalid sync state JSON".to_string()))?
+        .get("credentials")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ApiError::BadRequest("No credentials in account".to_string()))?
+        .to_string();
 
     let mut creds = decrypt_credentials(&state.crypto, &encrypted_hex)
         .map_err(|e| ApiError::Internal(format!("Failed to decrypt credentials: {e}")))?;
@@ -596,7 +634,9 @@ pub async fn test_account_connection(
                 .update_account_sync_state(&account_id, &sync_state_val.to_string())
                 .map_err(|e| ApiError::Internal(format!("Failed to save new token: {e}")))?;
 
-            Ok(Json(json!({ "success": true, "message": "Gmail token was expired but successfully refreshed." })))
+            Ok(Json(
+                json!({ "success": true, "message": "Gmail token was expired but successfully refreshed." }),
+            ))
         }
     }
 }
@@ -636,3 +676,143 @@ pub async fn test_imap_connection(
 }
 
 use rusqlite::OptionalExtension;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::credentials::{
+        encrypt_credentials, AccountCredentials, ImapCredentials, SmtpCredentials,
+    };
+    use axum::extract::{Path, State};
+    use pebble_core::{now_timestamp, Account, ProviderType};
+    use serde_json::Value;
+
+    #[tokio::test]
+    async fn update_account_credentials_preserves_sync_state_metadata() {
+        let state = crate::routes::magicpush::tests::test_state_ref();
+        let account = Account {
+            id: "account-1".to_string(),
+            email: "alice@example.com".to_string(),
+            display_name: "Alice".to_string(),
+            color: None,
+            provider: ProviderType::Imap,
+            created_at: now_timestamp(),
+            updated_at: now_timestamp(),
+        };
+        state.store.insert_account(&account).unwrap();
+        let encrypted = encrypt_credentials(
+            &state.crypto,
+            &AccountCredentials::Imap {
+                imap: ImapCredentials {
+                    host: "imap.old.example.com".to_string(),
+                    port: 993,
+                    username: "alice@example.com".to_string(),
+                    password: "old-password".to_string(),
+                    security: "tls".to_string(),
+                },
+                smtp: SmtpCredentials {
+                    host: "smtp.old.example.com".to_string(),
+                    port: 465,
+                    username: "alice@example.com".to_string(),
+                    password: "old-password".to_string(),
+                    security: "tls".to_string(),
+                },
+            },
+        )
+        .unwrap();
+        state
+            .store
+            .update_account_sync_state(
+                &account.id,
+                &serde_json::json!({
+                    "credentials": encrypted,
+                    "sync_strategy": "since_date",
+                    "sync_since_date": "2024-01-01",
+                    "provider": "imap"
+                })
+                .to_string(),
+            )
+            .unwrap();
+
+        let _ = update_account(
+            State(state.clone()),
+            Path(account.id.clone()),
+            Json(UpdateAccountRequest {
+                email: Some("alice@example.com".to_string()),
+                display_name: Some("Alice".to_string()),
+                color: None,
+                username: None,
+                password: None,
+                imap_host: Some("imap.new.example.com".to_string()),
+                imap_port: None,
+                smtp_host: None,
+                smtp_port: None,
+                imap_security: None,
+                smtp_security: None,
+            }),
+        )
+        .await
+        .unwrap();
+
+        let stored = state
+            .store
+            .get_account_sync_state(&account.id)
+            .unwrap()
+            .unwrap();
+        let state_json: Value = serde_json::from_str(&stored).unwrap();
+        assert_eq!(state_json["sync_strategy"], "since_date");
+        assert_eq!(state_json["sync_since_date"], "2024-01-01");
+        assert_eq!(state_json["provider"], "imap");
+        assert!(state_json["credentials"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn get_account_config_returns_username_without_password() {
+        let state = crate::routes::magicpush::tests::test_state_ref();
+        let account = Account {
+            id: "account-1".to_string(),
+            email: "qq-user@qq.com".to_string(),
+            display_name: "QQ User".to_string(),
+            color: None,
+            provider: ProviderType::Imap,
+            created_at: now_timestamp(),
+            updated_at: now_timestamp(),
+        };
+        state.store.insert_account(&account).unwrap();
+        let encrypted = encrypt_credentials(
+            &state.crypto,
+            &AccountCredentials::Imap {
+                imap: ImapCredentials {
+                    host: "imap.qq.com".to_string(),
+                    port: 993,
+                    username: "qq-user@qq.com".to_string(),
+                    password: "authorization-code".to_string(),
+                    security: "tls".to_string(),
+                },
+                smtp: SmtpCredentials {
+                    host: "smtp.qq.com".to_string(),
+                    port: 465,
+                    username: "qq-user@qq.com".to_string(),
+                    password: "authorization-code".to_string(),
+                    security: "tls".to_string(),
+                },
+            },
+        )
+        .unwrap();
+        state
+            .store
+            .update_account_sync_state(
+                &account.id,
+                &serde_json::json!({ "credentials": encrypted }).to_string(),
+            )
+            .unwrap();
+
+        let Json(response) = get_account(State(state), Path(account.id.clone()))
+            .await
+            .unwrap();
+        let json = serde_json::to_value(response).unwrap();
+
+        assert_eq!(json["username"], "qq-user@qq.com");
+        assert!(json.get("password").is_none());
+    }
+}

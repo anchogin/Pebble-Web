@@ -959,7 +959,7 @@ impl ImapProvider {
 
     /// Fetch messages with date filter and pagination.
     /// Returns `(uids, total_count)` where total_count is the total matching messages.
-    /// 
+    ///
     /// - `since_date`: IMAP date format "DD-Mon-YYYY" (e.g., "01-Jan-2020")
     /// - `offset`: starting position (0-based)
     /// - `limit`: maximum number of messages to fetch

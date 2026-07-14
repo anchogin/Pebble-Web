@@ -4,8 +4,8 @@ import { getInitialLanguage, LANGUAGE_STORAGE_KEY, type Language } from "@/lib/l
 import { useComposeStore } from "./compose.store";
 import { useMailStore } from "./mail.store";
 
-export type ActiveView = "inbox" | "kanban" | "settings" | "search" | "snoozed" | "starred" | "compose";
-export type SettingsTab = "accounts" | "general" | "proxy" | "appearance" | "privacy" | "rules" | "remoteWrites" | "translation" | "shortcuts" | "cloudSync" | "about";
+export type ActiveView = "inbox" | "message" | "kanban" | "settings" | "search" | "snoozed" | "starred" | "compose";
+export type SettingsTab = "accounts" | "general" | "proxy" | "appearance" | "privacy" | "rules" | "remoteWrites" | "translation" | "push" | "shortcuts" | "cloudSync" | "about";
 export type Theme = "light" | "dark" | "system";
 export type { Language } from "@/lib/language";
 export type NetworkStatus = "online" | "offline";
@@ -145,6 +145,7 @@ interface UIState {
   toggleSidebar: () => void;
   setActiveView: (view: ActiveView) => void;
   openMessageInInbox: (messageId: string) => void;
+  openMessageStandalone: (messageId: string) => void;
   setTheme: (theme: Theme) => void;
   setBackgroundImage: (image: { path: string; filename: string }) => void;
   setBackgroundImageFit: (fit: BackgroundImageFit) => void;
@@ -220,6 +221,16 @@ export const useUIStore = create<UIState>((set) => ({
       batchMode: false,
     });
     set({ activeView: "inbox" });
+  },
+  openMessageStandalone: (messageId) => {
+    useMailStore.setState({
+      selectedMessageId: messageId,
+      selectedThreadId: null,
+      threadView: false,
+      selectedMessageIds: new Set(),
+      batchMode: false,
+    });
+    set({ activeView: "message" });
   },
   setTheme: (theme) => {
     localStorage.setItem("pebble-theme", theme);

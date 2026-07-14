@@ -2,7 +2,7 @@ use pebble_core::{PebbleError, Result};
 use rusqlite::Connection;
 use std::collections::HashSet;
 
-const CURRENT_VERSION: u32 = 15;
+const CURRENT_VERSION: u32 = 17;
 const ACCOUNT_COLOR_PRESETS: [&str; 12] = [
     "#0ea5e9", "#22c55e", "#f59e0b", "#8b5cf6", "#f43f5e", "#14b8a6", "#6366f1", "#f97316",
     "#06b6d4", "#ec4899", "#84cc16", "#3b82f6",
@@ -361,6 +361,63 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
             .map_err(|e| PebbleError::Storage(format!("Migration V15 commit failed: {e}")))?;
     }
 
+    if version < 16 {
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| PebbleError::Storage(format!("Migration V16 begin failed: {e}")))?;
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS magicpush_config (
+                id TEXT PRIMARY KEY DEFAULT 'active',
+                base_url TEXT NOT NULL DEFAULT '',
+                token_encrypted TEXT,
+                public_url TEXT NOT NULL DEFAULT '',
+                is_enabled INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );",
+        )
+        .map_err(|e| PebbleError::Storage(format!("Migration V16 failed: {e}")))?;
+        set_schema_version(&tx, CURRENT_VERSION)?;
+        tx.commit()
+            .map_err(|e| PebbleError::Storage(format!("Migration V16 commit failed: {e}")))?;
+    }
+
+    if version < 17 {
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| PebbleError::Storage(format!("Migration V17 begin failed: {e}")))?;
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS app_settings (
+                id TEXT PRIMARY KEY DEFAULT 'active',
+                public_url TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            INSERT INTO app_settings (id, public_url, created_at, updated_at)
+            SELECT 'active', rtrim(public_url, '/'), created_at, updated_at
+            FROM magicpush_config
+            WHERE id = 'active'
+              AND trim(public_url) != ''
+              AND NOT EXISTS (SELECT 1 FROM app_settings WHERE id = 'active');
+            UPDATE app_settings
+            SET public_url = (
+                SELECT rtrim(public_url, '/') FROM magicpush_config WHERE id = 'active'
+            ),
+                updated_at = (
+                SELECT updated_at FROM magicpush_config WHERE id = 'active'
+            )
+            WHERE id = 'active'
+              AND trim(public_url) = ''
+              AND EXISTS (
+                SELECT 1 FROM magicpush_config WHERE id = 'active' AND trim(public_url) != ''
+              );",
+        )
+        .map_err(|e| PebbleError::Storage(format!("Migration V17 failed: {e}")))?;
+        set_schema_version(&tx, CURRENT_VERSION)?;
+        tx.commit()
+            .map_err(|e| PebbleError::Storage(format!("Migration V17 commit failed: {e}")))?;
+    }
+
     Ok(())
 }
 
@@ -501,6 +558,23 @@ CREATE TABLE IF NOT EXISTS translate_config (
     provider_type TEXT NOT NULL CHECK(provider_type IN ('deeplx', 'deepl', 'generic_api', 'llm')),
     config TEXT NOT NULL DEFAULT '{}',
     is_enabled INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS magicpush_config (
+    id TEXT PRIMARY KEY DEFAULT 'active',
+    base_url TEXT NOT NULL DEFAULT '',
+    token_encrypted TEXT,
+    public_url TEXT NOT NULL DEFAULT '',
+    is_enabled INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    id TEXT PRIMARY KEY DEFAULT 'active',
+    public_url TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -752,5 +826,75 @@ mod tests {
             [],
         );
         assert!(duplicate_insert.is_err());
+    }
+
+    #[test]
+    fn migration_v17_backfills_app_public_url_from_magicpush_config() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE magicpush_config (
+                id TEXT PRIMARY KEY DEFAULT 'active',
+                base_url TEXT NOT NULL DEFAULT '',
+                token_encrypted TEXT,
+                public_url TEXT NOT NULL DEFAULT '',
+                is_enabled INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            INSERT INTO magicpush_config (id, base_url, token_encrypted, public_url, is_enabled, created_at, updated_at)
+            VALUES ('active', 'https://push.example.com', 'token', 'https://mail.example.com/', 1, 1, 1);
+            PRAGMA user_version = 16;",
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        let public_url: String = conn
+            .query_row(
+                "SELECT public_url FROM app_settings WHERE id = 'active'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(public_url, "https://mail.example.com");
+    }
+
+    #[test]
+    fn migration_v17_preserves_existing_app_public_url() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE magicpush_config (
+                id TEXT PRIMARY KEY DEFAULT 'active',
+                base_url TEXT NOT NULL DEFAULT '',
+                token_encrypted TEXT,
+                public_url TEXT NOT NULL DEFAULT '',
+                is_enabled INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            CREATE TABLE app_settings (
+                id TEXT PRIMARY KEY DEFAULT 'active',
+                public_url TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            INSERT INTO magicpush_config (id, base_url, token_encrypted, public_url, is_enabled, created_at, updated_at)
+            VALUES ('active', 'https://push.example.com', 'token', 'https://magicpush.example.com', 1, 1, 1);
+            INSERT INTO app_settings (id, public_url, created_at, updated_at)
+            VALUES ('active', 'https://general.example.com', 1, 1);
+            PRAGMA user_version = 16;",
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        let public_url: String = conn
+            .query_row(
+                "SELECT public_url FROM app_settings WHERE id = 'active'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(public_url, "https://general.example.com");
     }
 }

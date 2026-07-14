@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::magicpush::MagicPushNotifier;
 use crate::sync::SyncManager;
 use pebble_crypto::CryptoService;
 use pebble_rules::RunControl;
@@ -73,6 +74,7 @@ impl AppState {
             attachments_dir.clone(),
             config.sync_interval_secs,
             ws_broadcast.clone(),
+            MagicPushNotifier::new(store.clone(), crypto.clone())?,
         ));
 
         Ok(Self {
@@ -85,5 +87,30 @@ impl AppState {
             oauth_sessions: Arc::new(Mutex::new(HashMap::new())),
             rule_runs: Arc::new(Mutex::new(HashMap::new())),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn app_state_passes_configured_sync_interval_to_sync_manager() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = Config {
+            port: 8080,
+            data_dir: temp_dir.path().to_path_buf(),
+            password_hash: "hash".to_string(),
+            jwt_secret: "this-is-a-real-secret-with-32-plus-chars".to_string(),
+            sync_interval_secs: 17,
+            log_retain_days: 7,
+            google_client_id: None,
+            google_client_secret: None,
+            public_url: None,
+        };
+
+        let state = AppState::init(config).unwrap();
+
+        assert_eq!(state.sync_manager.sync_interval_secs(), 17);
     }
 }

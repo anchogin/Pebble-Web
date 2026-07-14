@@ -55,7 +55,10 @@ mod tests {
             folder_ids_camel: None,
         };
 
-        assert_eq!(params.selected_folder_ids("fallback"), vec!["f1", "f2", "f3"]);
+        assert_eq!(
+            params.selected_folder_ids("fallback"),
+            vec!["f1", "f2", "f3"]
+        );
     }
 
     #[test]
@@ -329,10 +332,15 @@ fn render_text_segment(segment: &str, out: &mut String) {
             }
             out.push_str(&escape_html(&remaining[..angle_pos + 1]));
             remaining = &remaining[angle_pos + 1..];
-        } else if let Some(pos) = remaining.find("http://").or_else(|| remaining.find("https://")) {
+        } else if let Some(pos) = remaining
+            .find("http://")
+            .or_else(|| remaining.find("https://"))
+        {
             let url_part = &remaining[pos..];
             let url_end = url_part
-                .find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\'' | ')' | ']'))
+                .find(|c: char| {
+                    c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\'' | ')' | ']')
+                })
                 .unwrap_or(url_part.len());
             let url = &url_part[..url_end];
             out.push_str(&escape_html(&remaining[..pos]));
@@ -372,7 +380,13 @@ fn is_bare_url_line(s: &str) -> Option<&str> {
                 && !inner.contains(' ')
             {
                 let after = t[close + 1..].trim();
-                if after.is_empty() || (after.chars().count() <= 2 && after.chars().all(|c| c.is_ascii_punctuation() || matches!(c, '。' | '，' | '！' | '？' | '、' | '…'))) {
+                if after.is_empty()
+                    || (after.chars().count() <= 2
+                        && after.chars().all(|c| {
+                            c.is_ascii_punctuation()
+                                || matches!(c, '。' | '，' | '！' | '？' | '、' | '…')
+                        }))
+                {
                     return Some(inner);
                 }
             }
@@ -668,9 +682,12 @@ pub async fn get_message_with_html(
             } else {
                 html_raw
             };
-            let rendered =
-                render_email_html_for_privacy(&effective_html, privacy_mode, Some(&msg.from_address))
-                    .map_err(|e| ApiError::Internal(format!("Failed to render html: {e}")))?;
+            let rendered = render_email_html_for_privacy(
+                &effective_html,
+                privacy_mode,
+                Some(&msg.from_address),
+            )
+            .map_err(|e| ApiError::Internal(format!("Failed to render html: {e}")))?;
             let msg_json = serde_json::to_value(msg)
                 .map_err(|e| ApiError::Internal(format!("Failed to serialize message: {e}")))?;
             let html_part = json!({
@@ -728,8 +745,9 @@ pub async fn render_html(
             } else {
                 html_raw
             };
-            let rendered = render_email_html_for_privacy(&effective_html, privacy_mode, Some(&from_address))
-                .map_err(|e| ApiError::Internal(format!("Failed to render html: {e}")))?;
+            let rendered =
+                render_email_html_for_privacy(&effective_html, privacy_mode, Some(&from_address))
+                    .map_err(|e| ApiError::Internal(format!("Failed to render html: {e}")))?;
             Ok(Json(json!({
                 "html": rendered.html,
                 "loadedRemoteContent": false,

@@ -3,6 +3,7 @@ import Sidebar from "../components/Sidebar";
 import StatusBar from "../components/StatusBar";
 import ComposeFAB from "../components/ComposeFAB";
 import InboxView from "../features/inbox/InboxView";
+import MessageDetail from "../components/MessageDetail";
 import CommandPalette from "../features/command-palette/CommandPalette";
 import ToastContainer from "../components/ToastContainer";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -11,6 +12,7 @@ import { useComposeStore } from "../stores/compose.store";
 import { useUIStore, applyThemeToDom } from "../stores/ui.store";
 import { useCommandStore } from "../stores/command.store";
 import { useKanbanStore } from "../stores/kanban.store";
+import { useMailStore } from "../stores/mail.store";
 import { useKeyboard } from "../hooks/useKeyboard";
 import { useNetworkStatus } from "../hooks/useNetworkStatus";
 import { buildCommands } from "../features/command-palette/commands";
@@ -19,6 +21,7 @@ import { createLazyViewPreloader, scheduleLazyViewPreload } from "./lazyViewPrel
 import { useRealtimePreferenceSync } from "./useRealtimePreferenceSync";
 import { useRealtimeSyncTriggers } from "./useRealtimeSyncTriggers";
 import { useNotificationOpenNavigation } from "./useNotificationOpenNavigation";
+import { useMessageIdQueryParam } from "./useMessageIdQueryParam";
 import { useCloseToBackground } from "./useCloseToBackground";
 import { useTrayI18n } from "./useTrayI18n";
 import { useMailtoOpen } from "./useMailtoOpen";
@@ -51,6 +54,7 @@ import { WifiOff } from "lucide-react";
 
 export default function Layout() {
   const activeView = useUIStore((s) => s.activeView);
+  const selectedMessageId = useMailStore((s) => s.selectedMessageId);
   const displayedView = activeView;
   const composeKey = useComposeStore((s) => s.composeKey);
   const theme = useUIStore((s) => s.theme);
@@ -70,6 +74,7 @@ export default function Layout() {
   useRealtimePreferenceSync();
   useRealtimeSyncTriggers();
   useNotificationOpenNavigation();
+  useMessageIdQueryParam();
   useCloseToBackground();
   useTrayI18n();
   useMailtoOpen();
@@ -102,6 +107,15 @@ export default function Layout() {
           <ViewErrorBoundary key={displayedView}>
             <Suspense fallback={<ViewLoadingFallback />}>
               {displayedView === "inbox" && <InboxView />}
+              {displayedView === "message" && selectedMessageId && (
+                <MessageDetail
+                  messageId={selectedMessageId}
+                  onBack={() => {
+                    useMailStore.getState().setSelectedMessage(null);
+                    useUIStore.getState().setActiveView("inbox");
+                  }}
+                />
+              )}
               {displayedView === "kanban" && <KanbanView />}
               {displayedView === "settings" && <SettingsView />}
               {displayedView === "search" && <SearchView />}

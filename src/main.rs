@@ -2,6 +2,9 @@ mod auth;
 mod config;
 mod credentials;
 mod error;
+mod magicpush;
+#[cfg(test)]
+mod magicpush_tests;
 mod routes;
 mod state;
 mod sync;
@@ -12,8 +15,8 @@ use crate::state::{AppState, AppStateRef};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing::info;
-use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
@@ -39,8 +42,7 @@ async fn main() {
         .with_ansi(false)
         .with_writer(non_blocking);
 
-    let stdout_layer = tracing_subscriber::fmt::layer()
-        .with_writer(std::io::stdout);
+    let stdout_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stdout);
 
     tracing_subscriber::registry()
         .with(env_filter)
@@ -78,7 +80,9 @@ async fn main() {
 
 fn purge_old_logs(log_dir: &std::path::Path, retain_days: u32) {
     let cutoff = std::time::SystemTime::now()
-        .checked_sub(std::time::Duration::from_secs(u64::from(retain_days) * 86400))
+        .checked_sub(std::time::Duration::from_secs(
+            u64::from(retain_days) * 86400,
+        ))
         .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
 
     let entries = match std::fs::read_dir(log_dir) {
@@ -104,6 +108,10 @@ fn purge_old_logs(log_dir: &std::path::Path, retain_days: u32) {
     }
 
     if deleted > 0 {
-        eprintln!("Purged {} old log file(s) from {}", deleted, log_dir.display());
+        eprintln!(
+            "Purged {} old log file(s) from {}",
+            deleted,
+            log_dir.display()
+        );
     }
 }

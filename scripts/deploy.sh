@@ -5,7 +5,7 @@ REPO_URL="${PEBBLE_REPO_URL:-https://github.com/QingJ01/Pebble-Web.git}"
 BRANCH="${PEBBLE_BRANCH:-master}"
 INSTALL_DIR="${PEBBLE_INSTALL_DIR:-${HOME:-}/pebble-web}"
 PEBBLE_PORT="${PEBBLE_PORT:-8080}"
-PEBBLE_SYNC_INTERVAL="${PEBBLE_SYNC_INTERVAL:-300}"
+PEBBLE_SYNC_INTERVAL="${PEBBLE_SYNC_INTERVAL:-10}"
 
 log() {
   printf '\033[1;34m==>\033[0m %s\n' "$*"

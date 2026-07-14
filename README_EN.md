@@ -14,6 +14,7 @@ Pebble Web is a self-hosted web email client derived from the desktop [Pebble](h
 - Labels and Kanban: custom labels, mail task board, context notes
 - Snooze workflow for deferred messages
 - Translation integrations for DeepLX, DeepL, generic translation services, and LLM-based translation
+- New mail push notifications configurable with MagicPush in Settings
 - Privacy protection: remote images are blocked by default, with trusted sender support
 - Attachment upload staging and authenticated downloads
 - WebDAV settings backup and restore
@@ -132,8 +133,14 @@ The frontend development server proxies application requests to the backend.
 | `PEBBLE_PORT` | No | `8080` | Server port |
 | `PEBBLE_DATA_DIR` | No | `/data` | Data directory |
 | `PEBBLE_STATIC_DIR` | No | `./frontend/dist` | Frontend static files directory |
-| `PEBBLE_SYNC_INTERVAL` | No | `300` | Mail sync interval in seconds |
+| `PEBBLE_SYNC_INTERVAL` | No | `10` | Mail sync interval in seconds |
 | `PEBBLE_ENCRYPTION_KEY` | No | auto-generated | 32-byte hex-encoded encryption key |
+| `PEBBLE_LOG_RETAIN_DAYS` | No | `1` | Log retention in days |
+| `GOOGLE_CLIENT_ID` | No | none | Google OAuth client ID |
+| `GOOGLE_CLIENT_SECRET` | No | none | Google OAuth client secret |
+| `PEBBLE_PUBLIC_URL` | No | none | Public Pebble server URL; used for OAuth callbacks until the General setting is configured |
+
+The public Pebble URL is configured in the Web UI under Settings -> General. Google OAuth callbacks and MagicPush notification links both use that shared value. MagicPush new-mail notifications are configured under Settings -> Push with the MagicPush service URL and endpoint token; the token is encrypted in the local database.
 
 Security notes:
 

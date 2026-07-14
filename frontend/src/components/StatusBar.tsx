@@ -8,8 +8,15 @@ import { useMailStore } from "@/stores/mail.store";
 import { stopSync } from "@/lib/api";
 import { useSyncMutation } from "@/hooks/mutations/useSyncMutation";
 import {
+  useAccountsQuery,
   usePendingMailOpsSummary,
 } from "@/hooks/queries";
+
+interface SyncAccount {
+  id: string;
+}
+
+const EMPTY_ACCOUNTS: SyncAccount[] = [];
 
 export default function StatusBar() {
   const { t } = useTranslation();
@@ -24,8 +31,10 @@ export default function StatusBar() {
   const activeAccountId = useMailStore((s) => s.activeAccountId);
   const syncMutation = useSyncMutation();
   const queryClient = useQueryClient();
+  const { data: accounts = EMPTY_ACCOUNTS } = useAccountsQuery();
   const { data: pendingOpsSummary } = usePendingMailOpsSummary(activeAccountId);
   const syncStatusRef = useRef(syncStatus);
+  const syncAccountIds = activeAccountId ? [activeAccountId] : accounts.map((account) => account.id);
 
   useEffect(() => {
     syncStatusRef.current = syncStatus;
@@ -40,14 +49,14 @@ export default function StatusBar() {
   // For now, rely on react-query's refetch intervals.
 
   async function handleSync() {
-    if (!activeAccountId) return;
+    if (syncAccountIds.length === 0) return;
     if (syncStatus === "syncing") {
-      try { await stopSync(activeAccountId); } catch { /* ignored */ }
+      try { await Promise.all(syncAccountIds.map((accountId) => stopSync(accountId))); } catch { /* ignored */ }
       updateSyncStatus("idle");
     } else {
       updateSyncStatus("syncing");
       try {
-        await syncMutation.mutateAsync(activeAccountId);
+        await Promise.all(syncAccountIds.map((accountId) => syncMutation.mutateAsync(accountId)));
         updateSyncStatus("idle");
         queryClient.invalidateQueries({ queryKey: ["folders"] });
         queryClient.invalidateQueries({ queryKey: ["messages"] });
@@ -125,18 +134,18 @@ export default function StatusBar() {
           )}
           <button
             onClick={handleSync}
-            disabled={!activeAccountId}
+            disabled={syncAccountIds.length === 0}
             title={syncStatus === "syncing" ? t("status.stopSync") : t("status.syncNow")}
             aria-label={syncStatus === "syncing" ? t("status.stopSync") : t("status.syncNow")}
             style={{
               background: "none",
               border: "none",
-              cursor: activeAccountId ? "pointer" : "default",
+              cursor: syncAccountIds.length > 0 ? "pointer" : "default",
               padding: "2px",
               color: "var(--color-text-secondary)",
               display: "flex",
               alignItems: "center",
-              opacity: activeAccountId ? 1 : 0.4,
+              opacity: syncAccountIds.length > 0 ? 1 : 0.4,
             }}
           >
             <RefreshCw

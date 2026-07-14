@@ -9,6 +9,7 @@ members = [
     "crates/pebble-crypto",
     "crates/pebble-oauth",
     "crates/pebble-rules",
+    "crates/pebble-push",
 ]
 resolver = "2"
 
@@ -71,5 +72,9 @@ pebble-mail = { path = "crates/pebble-mail" }
 pebble-rules = { path = "crates/pebble-rules" }
 pebble-translate = { path = "crates/pebble-translate" }
 pebble-oauth = { path = "crates/pebble-oauth" }
+pebble-push = { path = "crates/pebble-push" }
 dotenv = "0.15"
 reqwest = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

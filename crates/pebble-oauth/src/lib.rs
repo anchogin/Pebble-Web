@@ -224,7 +224,8 @@ impl OAuthManager {
         &self,
         redirect_uri: &str,
     ) -> Result<(String, PkceState), OAuthError> {
-        self.start_auth_with_redirect_and_state(redirect_uri, None).await
+        self.start_auth_with_redirect_and_state(redirect_uri, None)
+            .await
     }
 
     /// Start the OAuth flow with an explicit redirect URI and optional state value.
@@ -274,12 +275,23 @@ impl OAuthManager {
                     Some(amp) => (&after_scope[..amp], &after_scope[amp..]),
                     None => (after_scope, ""),
                 };
-                format!("{}scope={}{}", &s[..pos], scope_value.replace('+', "%20"), rest)
+                format!(
+                    "{}scope={}{}",
+                    &s[..pos],
+                    scope_value.replace('+', "%20"),
+                    rest
+                )
             } else {
                 s
             }
         };
-        Ok((auth_url_str, PkceState { verifier, csrf_token }))
+        Ok((
+            auth_url_str,
+            PkceState {
+                verifier,
+                csrf_token,
+            },
+        ))
     }
 
     /// Complete the OAuth flow with an explicit redirect URI (for server-side callback).

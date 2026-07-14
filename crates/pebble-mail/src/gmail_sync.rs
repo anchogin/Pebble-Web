@@ -16,7 +16,7 @@ use crate::backoff::SyncBackoff;
 use crate::provider::gmail::{
     visible_label_ids, GmailFetchedMessage, GmailMessageRef, GmailProvider,
 };
-use crate::realtime_policy::{RealtimePollPolicy, RealtimeRuntimeState, SyncTrigger};
+use crate::realtime_policy::{RealtimeRuntimeState, SyncTrigger};
 use crate::sync::{
     persist_message_attachments_async, recv_sync_trigger, StoredMessage, SyncConfig, SyncError,
     SyncLogEntry, SyncWorkerBase,
@@ -937,7 +937,10 @@ impl GmailSyncWorker {
         config: SyncConfig,
         mut trigger_rx: Option<mpsc::UnboundedReceiver<SyncTrigger>>,
     ) {
-        info!("[GmailWorker] run() called for account {}", self.base.account_id);
+        info!(
+            "[GmailWorker] run() called for account {}",
+            self.base.account_id
+        );
 
         if let Err(e) = self.ensure_valid_token().await {
             error!("[GmailWorker] Initial token validation failed: {}", e);
@@ -945,11 +948,19 @@ impl GmailSyncWorker {
             return;
         }
 
-        let stored_cursor = self.base.store.get_sync_cursor(&self.base.account_id).ok().flatten();
+        let stored_cursor = self
+            .base
+            .store
+            .get_sync_cursor(&self.base.account_id)
+            .ok()
+            .flatten();
         let mut is_first_sync = stored_cursor.is_none();
 
         // Perform the first, immediate sync on startup.
-        info!("[GmailWorker] Performing startup sync (is_first_sync: {})", is_first_sync);
+        info!(
+            "[GmailWorker] Performing startup sync (is_first_sync: {})",
+            is_first_sync
+        );
         if is_first_sync {
             if let Err(e) = self.initial_sync().await {
                 error!("[GmailWorker] Initial sync failed: {}", e);
@@ -960,7 +971,10 @@ impl GmailSyncWorker {
         } else {
             // For existing accounts, do a delta-sync on startup.
             if let Err(e) = self.poll_changes().await {
-                warn!("[GmailWorker] Startup poll_changes failed ({}), falling back to initial_sync", e);
+                warn!(
+                    "[GmailWorker] Startup poll_changes failed ({}), falling back to initial_sync",
+                    e
+                );
                 if let Err(e2) = self.initial_sync().await {
                     error!("[GmailWorker] Fallback initial_sync also failed: {}", e2);
                     self.base.emit_error("sync", &e2.to_string());
@@ -977,6 +991,11 @@ impl GmailSyncWorker {
         info!("[GmailWorker] Entering main sync loop...");
         let mut stop_rx = self.stop_rx.clone();
         let mut backoff = SyncBackoff::new();
+        let poll_interval = Duration::from_secs(config.poll_interval_secs.max(1));
+        let mut poll_ticker =
+            tokio::time::interval_at(tokio::time::Instant::now() + poll_interval, poll_interval);
+        poll_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut runtime = RealtimeRuntimeState::new(Duration::from_secs(60), Instant::now());
 
         loop {
             tokio::select! {
@@ -992,6 +1011,7 @@ impl GmailSyncWorker {
                 trigger = recv_sync_trigger(&mut trigger_rx) => {
                     if let Some(trigger_type) = trigger {
                         info!("[GmailWorker] Received trigger: {:?}", trigger_type);
+                        runtime.record_trigger(trigger_type, Instant::now());
                         match trigger_type {
                             SyncTrigger::Startup => {
                                 // This was already handled above, but we'll run it again if triggered.
@@ -1021,15 +1041,17 @@ impl GmailSyncWorker {
                     }
                 }
 
-                // Add a default timed poll if you have one
-                // _ = tokio::time::sleep(Duration::from_secs(config.poll_interval_secs)) => {
-                //     info!("[GmailWorker] Timed poll triggered.");
-                //     self.run_poll_cycle(&mut backoff, true).await;
-                // }
+                _ = poll_ticker.tick() => {
+                    info!("[GmailWorker] Timed poll triggered.");
+                    self.run_poll_cycle(&mut backoff, true).await;
+                }
             }
         }
 
-        info!("[GmailWorker] Worker for account {} has finished.", self.base.account_id);
+        info!(
+            "[GmailWorker] Worker for account {} has finished.",
+            self.base.account_id
+        );
     }
 }
 
@@ -1175,6 +1197,31 @@ mod tests {
         assert!(!should_use_gmail_history_sync_on_startup(None));
         assert!(!should_use_gmail_history_sync_on_startup(Some("")));
         assert!(should_use_gmail_history_sync_on_startup(Some("history-1")));
+    }
+
+    #[test]
+    fn gmail_loop_has_scheduled_poll_branch() {
+        let source = include_str!("gmail_sync.rs");
+        let loop_source = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source before tests");
+        let configured_interval =
+            ["Duration::from_secs", "(config.poll_interval_secs.max(1))"].concat();
+        let scheduled_tick = ["poll_ticker", ".tick()"].concat();
+        let ticker_arm = loop_source
+            .split("_ = poll_ticker.tick() =>")
+            .nth(1)
+            .expect("poll ticker select arm");
+        let scheduled_poll = ["run_poll_cycle", "(&mut backoff, true)"].concat();
+
+        assert!(loop_source.contains(&configured_interval));
+        assert!(loop_source.contains("tokio::time::interval_at"));
+        assert!(loop_source.contains("tokio::time::Instant::now() + poll_interval"));
+        assert!(loop_source.contains(&scheduled_tick));
+        assert!(ticker_arm.contains(&scheduled_poll));
+        assert!(!loop_source.contains("tokio::time::sleep(poll_interval)"));
+        assert!(!loop_source.contains("next_poll_delay"));
     }
 
     #[tokio::test]

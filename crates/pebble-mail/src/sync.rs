@@ -20,10 +20,10 @@ pub struct SyncError {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct SyncLogEntry {
     pub timestamp: u64,
-    pub level: String,  // info, warn, error
+    pub level: String, // info, warn, error
     pub account_id: String,
     pub server: String,
-    pub action: String,  // connect, list_folders, fetch_messages, etc.
+    pub action: String, // connect, list_folders, fetch_messages, etc.
     pub request: Option<String>,
     pub response: Option<String>,
     pub error: Option<String>,
@@ -125,7 +125,7 @@ impl SyncProgress {
 
 use crate::parser::{parse_raw_email, AttachmentData, ParsedMessage};
 use crate::provider::imap_provider::ImapMailProvider;
-use crate::realtime_policy::{RealtimePollPolicy, RealtimeRuntimeState, SyncTrigger};
+use crate::realtime_policy::{RealtimeRuntimeState, SyncTrigger};
 use crate::reconcile;
 use crate::thread::compute_thread_id;
 
@@ -422,25 +422,6 @@ fn should_fail_initial_sync_for_folder_error(
     folder_role == Some(pebble_core::FolderRole::Inbox) || is_retryable
 }
 
-fn idle_check_recovery_user_error(
-    reconnect_error: Option<String>,
-    poll_error: Option<String>,
-) -> Option<(&'static str, String)> {
-    if let Some(error) = reconnect_error {
-        return Some((
-            "connection",
-            format!("IMAP reconnect after idle check failed: {error}"),
-        ));
-    }
-    if let Some(error) = poll_error {
-        return Some((
-            "poll",
-            format!("Poll after idle check reconnect failed: {error}"),
-        ));
-    }
-    None
-}
-
 fn is_retryable_imap_connection_error(error: &PebbleError) -> bool {
     let PebbleError::Network(message) = error else {
         return false;
@@ -523,10 +504,6 @@ impl SyncConfig {
     pub fn manual_only(&self) -> bool {
         self.poll_interval_secs == 0
     }
-}
-
-fn imap_poll_policy(config: &SyncConfig) -> RealtimePollPolicy {
-    RealtimePollPolicy::from_foreground_interval_secs(config.poll_interval_secs)
 }
 
 fn first_reconcile_deadline(now: Instant, interval: Duration) -> Instant {
@@ -1054,7 +1031,8 @@ impl SyncWorker {
         let sync_since_date = sync_state.as_ref().and_then(|s| s.sync_since_date.clone());
 
         // If sync strategy is "all" or "since_date", use pagination
-        if sync_strategy.as_deref() == Some("all") || sync_strategy.as_deref() == Some("since_date") {
+        if sync_strategy.as_deref() == Some("all") || sync_strategy.as_deref() == Some("since_date")
+        {
             self.base.emit_log(
                 SyncLogEntry::new(&self.base.account_id, &server, "initial_sync_folder")
                     .with_request(format!(
@@ -1066,7 +1044,9 @@ impl SyncWorker {
             );
             // Reset cancel flag before starting
             self.reset_cancel_flag();
-            return self.sync_folder_with_pagination(folder, sync_since_date.as_deref()).await;
+            return self
+                .sync_folder_with_pagination(folder, sync_since_date.as_deref())
+                .await;
         }
 
         // Default: recent messages only
@@ -1112,7 +1092,10 @@ impl SyncWorker {
     fn format_imap_date(date_str: &str) -> Result<String> {
         let parts: Vec<&str> = date_str.split('-').collect();
         if parts.len() != 3 {
-            return Err(PebbleError::Storage(format!("Invalid date format: {}", date_str)));
+            return Err(PebbleError::Storage(format!(
+                "Invalid date format: {}",
+                date_str
+            )));
         }
 
         let year = parts[0];
@@ -1122,10 +1105,24 @@ impl SyncWorker {
         let day = parts[2];
 
         let month_name = match month_num {
-            1 => "Jan", 2 => "Feb", 3 => "Mar", 4 => "Apr",
-            5 => "May", 6 => "Jun", 7 => "Jul", 8 => "Aug",
-            9 => "Sep", 10 => "Oct", 11 => "Nov", 12 => "Dec",
-            _ => return Err(PebbleError::Storage(format!("Invalid month number: {}", month_num))),
+            1 => "Jan",
+            2 => "Feb",
+            3 => "Mar",
+            4 => "Apr",
+            5 => "May",
+            6 => "Jun",
+            7 => "Jul",
+            8 => "Aug",
+            9 => "Sep",
+            10 => "Oct",
+            11 => "Nov",
+            12 => "Dec",
+            _ => {
+                return Err(PebbleError::Storage(format!(
+                    "Invalid month number: {}",
+                    month_num
+                )))
+            }
         };
 
         Ok(format!("{}-{}-{}", day, month_name, year))
@@ -1164,7 +1161,10 @@ impl SyncWorker {
         info!(
             "Starting paginated sync for folder {}{}",
             folder.name,
-            imap_date.as_ref().map(|d| format!(" since {}", d)).unwrap_or_default()
+            imap_date
+                .as_ref()
+                .map(|d| format!(" since {}", d))
+                .unwrap_or_default()
         );
 
         self.base.emit_sync_started("initial");
@@ -1177,22 +1177,32 @@ impl SyncWorker {
 
             loop {
                 if self.is_cancelled() {
-                    info!("Paginated sync cancelled after {} messages in {}", total_synced, folder.name);
+                    info!(
+                        "Paginated sync cancelled after {} messages in {}",
+                        total_synced, folder.name
+                    );
                     self.base.emit_sync_error("initial", "同步已取消");
                     return Ok(());
                 }
 
                 self.base.emit_log(
-                    SyncLogEntry::new(&self.base.account_id, &server, "fetch_batch")
-                        .with_request(format!(
+                    SyncLogEntry::new(&self.base.account_id, &server, "fetch_batch").with_request(
+                        format!(
                             "folder={} SEARCH SINCE {} offset={} limit={}",
                             folder.name, date, batch_offset, BATCH_SIZE
-                        )),
+                        ),
+                    ),
                 );
 
-                let (batch, total) = match self.provider
+                let (batch, total) = match self
+                    .provider
                     .inner()
-                    .fetch_messages_with_date_offset(&folder.remote_id, date, batch_offset, BATCH_SIZE as u32)
+                    .fetch_messages_with_date_offset(
+                        &folder.remote_id,
+                        date,
+                        batch_offset,
+                        BATCH_SIZE as u32,
+                    )
                     .await
                 {
                     Ok(result) => {
@@ -1200,7 +1210,9 @@ impl SyncWorker {
                             SyncLogEntry::new(&self.base.account_id, &server, "fetch_batch")
                                 .with_response(format!(
                                     "folder={} got {} msgs (total={})",
-                                    folder.name, result.0.len(), result.1
+                                    folder.name,
+                                    result.0.len(),
+                                    result.1
                                 ))
                                 .with_message_count(result.0.len() as u32),
                         );
@@ -1223,12 +1235,16 @@ impl SyncWorker {
                     total_count = Some(total);
                 }
 
-                let count = self.process_synced_messages(&batch, folder).await?;
-                total_synced += count;
+                self.process_synced_messages(&batch, folder).await?;
+                total_synced += batch.len() as u32;
                 batch_offset += BATCH_SIZE as u32;
 
                 let percentage = total_count.map(|t| {
-                    if t > 0 { (total_synced as f32 / t as f32) * 100.0 } else { 0.0 }
+                    if t > 0 {
+                        (total_synced as f32 / t as f32) * 100.0
+                    } else {
+                        0.0
+                    }
                 });
                 self.base.progress_tx.as_ref().map(|tx| {
                     let _ = tx.send(SyncProgress {
@@ -1259,13 +1275,19 @@ impl SyncWorker {
                 SyncLogEntry::new(&self.base.account_id, &server, "list_uids")
                     .with_request(format!("folder={} UID SEARCH ALL", folder.name)),
             );
-            let all_uids = match self.provider.inner().fetch_all_uids(&folder.remote_id).await {
+            let all_uids = match self
+                .provider
+                .inner()
+                .fetch_all_uids(&folder.remote_id)
+                .await
+            {
                 Ok(uids) => {
                     self.base.emit_log(
                         SyncLogEntry::new(&self.base.account_id, &server, "list_uids")
                             .with_response(format!(
                                 "folder={} found {} UIDs",
-                                folder.name, uids.len()
+                                folder.name,
+                                uids.len()
                             ))
                             .with_message_count(uids.len() as u32),
                     );
@@ -1285,31 +1307,42 @@ impl SyncWorker {
             // Step 2: fetch in batches by UID
             for (batch_idx, uid_chunk) in all_uids.chunks(BATCH_SIZE).enumerate() {
                 if self.is_cancelled() {
-                    info!("Full sync cancelled after {} messages in {}", total_synced, folder.name);
+                    info!(
+                        "Full sync cancelled after {} messages in {}",
+                        total_synced, folder.name
+                    );
                     self.base.emit_sync_error("initial", "同步已取消");
                     return Ok(());
                 }
 
-                let uid_preview: Vec<String> = uid_chunk.iter().take(3).map(|u| u.to_string()).collect();
+                let uid_preview: Vec<String> =
+                    uid_chunk.iter().take(3).map(|u| u.to_string()).collect();
                 self.base.emit_log(
-                    SyncLogEntry::new(&self.base.account_id, &server, "fetch_batch")
-                        .with_request(format!(
+                    SyncLogEntry::new(&self.base.account_id, &server, "fetch_batch").with_request(
+                        format!(
                             "folder={} UID FETCH uids=[{}{}] (batch {}/{})",
                             folder.name,
                             uid_preview.join(","),
                             if uid_chunk.len() > 3 { "..." } else { "" },
                             batch_idx + 1,
                             (total_count as usize).div_ceil(BATCH_SIZE),
-                        )),
+                        ),
+                    ),
                 );
 
-                let batch = match self.provider.inner().fetch_messages_by_uids(&folder.remote_id, uid_chunk).await {
+                let batch = match self
+                    .provider
+                    .inner()
+                    .fetch_messages_by_uids(&folder.remote_id, uid_chunk)
+                    .await
+                {
                     Ok(msgs) => {
                         self.base.emit_log(
                             SyncLogEntry::new(&self.base.account_id, &server, "fetch_batch")
                                 .with_response(format!(
                                     "folder={} fetched {} msgs",
-                                    folder.name, msgs.len()
+                                    folder.name,
+                                    msgs.len()
                                 ))
                                 .with_message_count(msgs.len() as u32),
                         );
@@ -1318,14 +1351,19 @@ impl SyncWorker {
                     Err(e) => {
                         self.base.emit_log(
                             SyncLogEntry::new(&self.base.account_id, &server, "fetch_batch")
-                                .with_error(format!("folder={} batch {} {}", folder.name, batch_idx + 1, e)),
+                                .with_error(format!(
+                                    "folder={} batch {} {}",
+                                    folder.name,
+                                    batch_idx + 1,
+                                    e
+                                )),
                         );
                         return Err(e);
                     }
                 };
 
-                let count = self.process_synced_messages(&batch, folder).await?;
-                total_synced += count;
+                self.process_synced_messages(&batch, folder).await?;
+                total_synced += batch.len() as u32;
 
                 let percentage = if total_count > 0 {
                     Some((total_synced as f32 / total_count as f32) * 100.0)
@@ -1569,7 +1607,11 @@ impl SyncWorker {
 
         self.base.emit_log(
             SyncLogEntry::new(&self.base.account_id, &server, "fetch_messages")
-                .with_response(format!("folder={} fetched {} raw", folder.name, raw_messages.len()))
+                .with_response(format!(
+                    "folder={} fetched {} raw",
+                    folder.name,
+                    raw_messages.len()
+                ))
                 .with_message_count(raw_messages.len() as u32),
         );
 
@@ -1735,7 +1777,10 @@ impl SyncWorker {
             let server = self.provider.inner().config().host.clone();
             self.base.emit_log(
                 SyncLogEntry::new(&self.base.account_id, &server, "store_messages")
-                    .with_response(format!("folder={} stored {} new messages", folder.name, stored_count))
+                    .with_response(format!(
+                        "folder={} stored {} new messages",
+                        folder.name, stored_count
+                    ))
                     .with_message_count(stored_count),
             );
         }
@@ -1818,7 +1863,10 @@ impl SyncWorker {
                     Ok(()) => {
                         self.base.emit_log(
                             SyncLogEntry::new(&self.base.account_id, &server, "reconnect")
-                                .with_response(format!("folder={} reconnected OK, retrying poll", folder.name)),
+                                .with_response(format!(
+                                    "folder={} reconnected OK, retrying poll",
+                                    folder.name
+                                )),
                         );
                         if let Err(retry_error) = self.poll_imap_folder_once(folder).await {
                             warn!(
@@ -1834,7 +1882,10 @@ impl SyncWorker {
                             );
                             self.base.emit_log(
                                 SyncLogEntry::new(&self.base.account_id, &server, "reconnect")
-                                    .with_error(format!("poll retry failed folder={} {}", folder.name, retry_error)),
+                                    .with_error(format!(
+                                        "poll retry failed folder={} {}",
+                                        folder.name, retry_error
+                                    )),
                             );
                             if is_retryable_imap_connection_error(&retry_error) {
                                 return Some(retry_error);
@@ -1849,7 +1900,10 @@ impl SyncWorker {
                         );
                         self.base.emit_log(
                             SyncLogEntry::new(&self.base.account_id, &server, "reconnect")
-                                .with_error(format!("folder={} reconnect failed: {}", folder.name, reconnect_error)),
+                                .with_error(format!(
+                                    "folder={} reconnect failed: {}",
+                                    folder.name, reconnect_error
+                                )),
                         );
                         Some(reconnect_error)
                     }
@@ -2239,7 +2293,10 @@ impl SyncWorker {
             return;
         }
 
-        let poll_policy = imap_poll_policy(&config);
+        let poll_interval = Duration::from_secs(config.poll_interval_secs.max(1));
+        let mut poll_ticker =
+            tokio::time::interval_at(tokio::time::Instant::now() + poll_interval, poll_interval);
+        poll_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let reconcile_interval = tokio::time::Duration::from_secs(config.reconcile_interval_secs);
 
         let mut reconcile_ticker = tokio::time::interval_at(
@@ -2315,19 +2372,15 @@ impl SyncWorker {
         }
         drop(idle_trigger_tx);
         let mut idle_watcher_active = idle_watcher.is_some();
-        let mut polling_baseline_trusted = false;
         if !idle_watcher_active
             && can_seed_imap_polling_baseline_after_startup(initial_sync_succeeded)
         {
-            polling_baseline_trusted = self.refresh_inbox_local_uid_baseline(&mut last_exists);
+            self.refresh_inbox_local_uid_baseline(&mut last_exists);
         }
 
         loop {
-            let next_poll_delay =
-                poll_policy.next_delay(runtime.context(backoff.failure_count(), Instant::now()));
-
             tokio::select! {
-                _ = tokio::time::sleep(next_poll_delay), if !idle_watcher_active => {
+                _ = poll_ticker.tick() => {
                     if backoff.is_circuit_open() {
                         warn!(
                             "Circuit open for account {} ({} consecutive failures); attempting half-open poll after scheduled delay",
@@ -2335,91 +2388,15 @@ impl SyncWorker {
                         );
                     }
 
-                    if !polling_baseline_trusted {
-                        match self.poll_new_messages().await {
-                            Ok(()) => {
-                                backoff.record_success();
-                                polling_baseline_trusted =
-                                    self.refresh_inbox_local_uid_baseline(&mut last_exists);
-                            }
-                            Err(e) => {
-                                warn!("Catch-up poll before IMAP baseline refresh failed for account {}: {}", self.base.account_id, e);
-                                self.base.emit_error("poll", &format!("Catch-up poll before IMAP baseline refresh failed: {}", e));
-                                backoff.record_failure();
-                            }
+                    match self.poll_new_messages().await {
+                        Ok(()) => {
+                            backoff.record_success();
+                            self.refresh_inbox_local_uid_baseline(&mut last_exists);
                         }
-                        continue;
-                    }
-
-                    // Quick check if mailbox has changes before doing full poll
-                    let folders = match self.base.store.list_folders(&self.base.account_id) {
-                        Ok(f) => f,
-                        Err(_) => {
+                        Err(e) => {
+                            warn!("Scheduled poll error for account {}: {}", self.base.account_id, e);
+                            self.base.emit_error("poll", &format!("Scheduled poll error: {}", e));
                             backoff.record_failure();
-                            continue;
-                        }
-                    };
-                    if let Some(inbox) = folders.iter().find(|f| f.role == Some(pebble_core::FolderRole::Inbox)) {
-                        match crate::idle::check_for_changes_with_idle(self.provider.inner(), &inbox.remote_id, &mut last_exists, false).await {
-                            Ok(crate::idle::IdleEvent::NewMail) => {
-                                if let Err(e) = self.poll_new_messages().await {
-                                    warn!("Poll error for account {}: {}", self.base.account_id, e);
-                                    self.base.emit_error("poll", &format!("Poll error: {}", e));
-                                    backoff.record_failure();
-                                } else {
-                                    backoff.record_success();
-                                    polling_baseline_trusted =
-                                        self.refresh_inbox_local_uid_baseline(&mut last_exists);
-                                }
-                            }
-                            Ok(crate::idle::IdleEvent::Timeout) => {
-                                debug!("No changes detected for account {}", self.base.account_id);
-                                backoff.record_success();
-                            }
-                            Ok(crate::idle::IdleEvent::Error(e)) => {
-                                warn!("IDLE check error for account {}: {}", self.base.account_id, e);
-                                let _ = self.provider.disconnect().await;
-                                let recovery_error = match self.provider.connect().await {
-                                    Ok(()) => match self.poll_new_messages().await {
-                                        Ok(()) => {
-                                            polling_baseline_trusted = self
-                                                .refresh_inbox_local_uid_baseline(&mut last_exists);
-                                            None
-                                        }
-                                        Err(poll_error) => {
-                                            warn!(
-                                                "Poll after idle check reconnect failed for account {}: {}",
-                                                self.base.account_id, poll_error
-                                            );
-                                            idle_check_recovery_user_error(
-                                                None,
-                                                Some(poll_error.to_string()),
-                                            )
-                                        }
-                                    },
-                                    Err(reconnect_error) => {
-                                        warn!(
-                                            "Reconnect after idle check failed for account {}: {}",
-                                            self.base.account_id, reconnect_error
-                                        );
-                                        idle_check_recovery_user_error(
-                                            Some(reconnect_error.to_string()),
-                                            None,
-                                        )
-                                    }
-                                };
-                                if let Some((error_type, message)) = recovery_error {
-                                    self.base.emit_error(error_type, &message);
-                                    backoff.record_failure();
-                                } else {
-                                    backoff.record_success();
-                                }
-                            }
-                            Err(e) => {
-                                warn!("IDLE check failed for account {}: {}", self.base.account_id, e);
-                                self.base.emit_error("idle", &format!("IDLE check failed: {}", e));
-                                backoff.record_failure();
-                            }
                         }
                     }
                 }
@@ -2462,10 +2439,7 @@ impl SyncWorker {
                                 }
                             };
                             if can_refresh_imap_polling_baseline_after_idle_fallback(catch_up_succeeded) {
-                                polling_baseline_trusted =
-                                    self.refresh_inbox_local_uid_baseline(&mut last_exists);
-                            } else {
-                                polling_baseline_trusted = false;
+                                self.refresh_inbox_local_uid_baseline(&mut last_exists);
                             }
                         }
                     }
@@ -2498,8 +2472,7 @@ impl SyncWorker {
                             } else {
                                 backoff.record_success();
                                 if !idle_watcher_active {
-                                    polling_baseline_trusted =
-                                        self.refresh_inbox_local_uid_baseline(&mut last_exists);
+                                    self.refresh_inbox_local_uid_baseline(&mut last_exists);
                                 }
                             }
                         }
@@ -2521,8 +2494,7 @@ impl SyncWorker {
                     } else {
                         backoff.record_success();
                         if !idle_watcher_active {
-                            polling_baseline_trusted =
-                                self.refresh_inbox_local_uid_baseline(&mut last_exists);
+                            self.refresh_inbox_local_uid_baseline(&mut last_exists);
                         }
                     }
                     let folders = match self.base.store.list_folders(&self.base.account_id) {
@@ -2665,29 +2637,50 @@ mod tests {
     }
 
     #[test]
-    fn imap_polling_fallback_uses_realtime_policy_delays() {
-        let config = SyncConfig {
-            poll_interval_secs: 60,
-            ..Default::default()
-        };
-        let policy = imap_poll_policy(&config);
+    fn imap_polling_fallback_uses_configured_interval() {
+        let source = include_str!("sync.rs");
+        let loop_source = source
+            .split("let poll_interval")
+            .nth(1)
+            .expect("poll interval production section")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source before tests");
+        let configured_interval = [
+            "= Duration::from_secs",
+            "(config.poll_interval_secs.max(1))",
+        ]
+        .concat();
+        let scheduled_tick = ["poll_ticker", ".tick()"].concat();
+        let poll_arm = loop_source
+            .split("_ = poll_ticker.tick() =>")
+            .nth(1)
+            .expect("poll ticker select arm");
 
-        assert_eq!(
-            policy.next_delay(crate::realtime_policy::RealtimeContext {
-                app_foreground: true,
-                recent_activity: true,
-                consecutive_failures: 0,
-            }),
-            std::time::Duration::from_secs(60)
-        );
-        assert_eq!(
-            policy.next_delay(crate::realtime_policy::RealtimeContext {
-                app_foreground: false,
-                recent_activity: false,
-                consecutive_failures: 0,
-            }),
-            std::time::Duration::from_secs(120)
-        );
+        assert!(loop_source.contains(&configured_interval));
+        assert!(loop_source.contains("tokio::time::interval_at"));
+        assert!(loop_source.contains("tokio::time::Instant::now() + poll_interval"));
+        assert!(loop_source.contains(&scheduled_tick));
+        assert!(!loop_source.contains("tokio::time::sleep(poll_interval)"));
+        assert!(!poll_arm.starts_with(", if !idle_watcher_active"));
+        assert!(poll_arm.contains("self.poll_new_messages().await"));
+        assert!(!poll_arm.contains("check_for_changes_with_idle"));
+        assert!(!loop_source.contains("next_poll_delay"));
+    }
+
+    #[test]
+    fn full_sync_progress_counts_processed_messages_not_new_inserts() {
+        let source = include_str!("sync.rs");
+        let pagination_source = source
+            .split("async fn sync_folder_with_pagination")
+            .nth(1)
+            .expect("pagination function source")
+            .split("async fn process_synced_messages")
+            .next()
+            .expect("pagination function body");
+
+        assert!(!pagination_source.contains("total_synced += count;"));
+        assert!(pagination_source.contains("total_synced += batch.len() as u32;"));
     }
 
     #[test]
@@ -2802,27 +2795,6 @@ mod tests {
         let interval = Duration::from_secs(900);
 
         assert_eq!(first_reconcile_deadline(now, interval), now + interval);
-    }
-
-    #[test]
-    fn idle_check_disconnect_does_not_surface_when_recovery_succeeds() {
-        let message = idle_check_recovery_user_error(None, None);
-
-        assert!(message.is_none());
-    }
-
-    #[test]
-    fn idle_check_reconnect_failure_surfaces_connection_error() {
-        let message =
-            idle_check_recovery_user_error(Some("Network error: os error 10053".to_string()), None);
-
-        assert_eq!(
-            message,
-            Some((
-                "connection",
-                "IMAP reconnect after idle check failed: Network error: os error 10053".to_string()
-            ))
-        );
     }
 
     #[test]

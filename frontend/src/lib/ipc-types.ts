@@ -169,15 +169,16 @@ export type ConnectionSecurity = "tls" | "starttls" | "plain";
 export interface AccountConfig {
   id: string;
   email: string;
-  display_name: string;
+  displayName: string;
   color?: string | null;
   provider: string;
-  imap_host?: string;
-  imap_port?: number;
-  imap_security?: ConnectionSecurity;
-  smtp_host?: string;
-  smtp_port?: number;
-  smtp_security?: ConnectionSecurity;
+  username?: string;
+  imapHost?: string;
+  imapPort?: number;
+  imapSecurity?: ConnectionSecurity;
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpSecurity?: ConnectionSecurity;
 }
 
 /** @rust src/routes/sync.rs → UpdateSyncConfigRequest (rename_all = "camelCase") */

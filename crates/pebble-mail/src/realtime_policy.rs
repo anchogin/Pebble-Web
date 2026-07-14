@@ -53,7 +53,11 @@ impl SyncTrigger {
     pub fn should_sync_now(self) -> bool {
         matches!(
             self,
-            Self::Manual | Self::NetworkOnline | Self::WindowFocus | Self::ProviderPush
+            Self::Startup
+                | Self::Manual
+                | Self::NetworkOnline
+                | Self::WindowFocus
+                | Self::ProviderPush
         )
     }
 
@@ -111,9 +115,18 @@ impl RealtimeRuntimeState {
 
 impl RealtimePollPolicy {
     pub fn from_foreground_interval_secs(foreground_recent_secs: u64) -> Self {
-        let foreground_recent_secs = foreground_recent_secs.max(1);
         let defaults = Self::default();
-        let foreground_idle_secs = defaults.foreground_idle_secs.max(foreground_recent_secs);
+        let configured_secs = foreground_recent_secs.max(1);
+        let foreground_recent_secs = if configured_secs > 60 {
+            defaults.foreground_recent_secs
+        } else {
+            configured_secs
+        };
+        let foreground_idle_secs = if configured_secs > 60 {
+            defaults.foreground_idle_secs
+        } else {
+            defaults.foreground_idle_secs.max(configured_secs)
+        };
         Self {
             foreground_recent_secs,
             foreground_idle_secs,
@@ -226,6 +239,20 @@ mod tests {
     }
 
     #[test]
+    fn deployment_sync_interval_does_not_make_active_realtime_polling_minute_scale() {
+        let policy = RealtimePollPolicy::from_foreground_interval_secs(300);
+
+        assert_eq!(
+            policy.next_delay(RealtimeContext {
+                app_foreground: true,
+                recent_activity: true,
+                consecutive_failures: 0,
+            }),
+            std::time::Duration::from_secs(10)
+        );
+    }
+
+    #[test]
     fn configured_interval_is_a_floor_for_foreground_idle_polling() {
         let policy = RealtimePollPolicy::from_foreground_interval_secs(60);
 
@@ -278,6 +305,11 @@ mod tests {
         );
         assert!(!SyncTrigger::WindowBlur.should_sync_now());
         assert!(SyncTrigger::WindowFocus.should_sync_now());
+    }
+
+    #[test]
+    fn startup_trigger_syncs_immediately() {
+        assert!(SyncTrigger::Startup.should_sync_now());
     }
 
     #[test]

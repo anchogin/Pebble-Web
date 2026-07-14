@@ -18,7 +18,13 @@ pub async fn trigger_sync(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     state
         .sync_manager
-        .trigger_sync(&body.account_id)
+        .trigger_sync_with_reason(
+            &body.account_id,
+            body.reason
+                .as_deref()
+                .map(SyncTrigger::from_reason)
+                .unwrap_or(SyncTrigger::Manual),
+        )
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to trigger sync: {e}")))?;
 
@@ -78,3 +84,4 @@ pub async fn update_sync_config(
         "message": "Sync settings saved. Restarting sync..."
     })))
 }
+use pebble_mail::SyncTrigger;

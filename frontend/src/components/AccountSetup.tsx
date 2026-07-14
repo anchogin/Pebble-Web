@@ -4,11 +4,10 @@ import { useConfirmStore } from "@/stores/confirm.store";
 import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { addAccount, startSync, testImapConnection, startGoogleOAuth, pollGoogleOAuth } from "@/lib/api";
+import { addAccount, testImapConnection, startGoogleOAuth, pollGoogleOAuth } from "@/lib/api";
 import type { AddAccountRequest } from "@/lib/api";
 import { accountsQueryKey } from "@/hooks/queries";
 import { extractErrorMessage } from "@/lib/extractErrorMessage";
-import { realtimePreferenceToPollInterval, useUIStore } from "@/stores/ui.store";
 import { useToastStore } from "@/stores/toast.store";
 import { inputStyle, labelStyle } from "../styles/form";
 
@@ -79,8 +78,6 @@ export default function AccountSetup({ onClose }: Props) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const emailInputRef = useRef<HTMLInputElement>(null);
-  const realtimeMode = useUIStore((state) => state.realtimeMode);
-  const syncPollInterval = realtimePreferenceToPollInterval(realtimeMode);
 
   const initialForm: AddAccountRequest = {
     email: "",
@@ -271,10 +268,6 @@ export default function AccountSetup({ onClose }: Props) {
         message: t("accountSetup.accountAdded", "Account added successfully"),
         type: "success",
       });
-      // Start sync in background; poll folders until they appear
-      startSync(account.id, syncPollInterval).catch((err) =>
-        console.warn("Initial sync failed (will retry later):", err),
-      );
       // Poll for folders a few times so sidebar updates without manual refresh
       refreshFoldersAfterSyncStart(queryClient, account.id);
     } catch (err) {

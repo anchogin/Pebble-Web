@@ -709,6 +709,7 @@ function EditAccountModal({ account, initialColor, onClose, onSaved }: {
   const [displayName, setDisplayName] = useState(account.display_name);
   const [email, setEmail] = useState(account.email);
   const [accountColor, setAccountColor] = useState(initialColor);
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [imapHost, setImapHost] = useState("");
   const [imapPort, setImapPort] = useState("");
@@ -743,15 +744,16 @@ function EditAccountModal({ account, initialColor, onClose, onSaved }: {
     getAccountConfig(account.id)
       .then((config: AccountConfig) => {
         if (!cancelled) {
-          setDisplayName(config.display_name);
+          setDisplayName(config.displayName);
           setEmail(config.email);
           if (config.color) setAccountColor(config.color);
-          if (config.imap_host) setImapHost(config.imap_host);
-          if (config.imap_port) setImapPort(String(config.imap_port));
-          if (config.imap_security) setImapSecurity(config.imap_security);
-          if (config.smtp_host) setSmtpHost(config.smtp_host);
-          if (config.smtp_port) setSmtpPort(String(config.smtp_port));
-          if (config.smtp_security) setSmtpSecurity(config.smtp_security);
+          if (config.username) setUsername(config.username);
+          if (config.imapHost) setImapHost(config.imapHost);
+          if (config.imapPort) setImapPort(String(config.imapPort));
+          if (config.imapSecurity) setImapSecurity(config.imapSecurity);
+          if (config.smtpHost) setSmtpHost(config.smtpHost);
+          if (config.smtpPort) setSmtpPort(String(config.smtpPort));
+          if (config.smtpSecurity) setSmtpSecurity(config.smtpSecurity);
         }
       })
       .catch((err) => {
@@ -813,10 +815,11 @@ function EditAccountModal({ account, initialColor, onClose, onSaved }: {
       if (isOAuth) {
         await updateAccount(
           account.id,
-          email,
-          displayName,
-          undefined,
-          undefined,
+            email,
+            displayName,
+            undefined,
+            undefined,
+            undefined,
           undefined,
           undefined,
           undefined,
@@ -829,10 +832,11 @@ function EditAccountModal({ account, initialColor, onClose, onSaved }: {
       } else {
         await updateAccount(
           account.id,
-          email,
-          displayName,
-          password || undefined,
-          imapHost || undefined,
+            email,
+            displayName,
+            username || undefined,
+            password || undefined,
+            imapHost || undefined,
           imapPort ? parseInt(imapPort, 10) : undefined,
           smtpHost || undefined,
           smtpPort ? parseInt(smtpPort, 10) : undefined,
@@ -1013,6 +1017,11 @@ function EditAccountModal({ account, initialColor, onClose, onSaved }: {
               </div>
             ) : (
               <>
+                <div style={fieldStyle}>
+                  <label style={labelStyle}>{t("accountSetup.username")}</label>
+                  <input aria-label={t("accountSetup.username")} style={inputStyle} type="text" value={username} onChange={(e) => setUsername(e.target.value)} placeholder={email} />
+                </div>
+
                 <div style={fieldStyle}>
                   <label style={labelStyle}>{t("accountSetup.password")} <span style={{ color: "var(--color-text-secondary)", fontWeight: 400 }}>({t("settings.leaveEmptyKeep", "leave empty to keep current")})</span></label>
                   <input aria-label={t("accountSetup.password")} style={inputStyle} type="password" value={password} onChange={(e) => setPassword(e.target.value)} />

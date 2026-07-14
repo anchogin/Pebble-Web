@@ -37,10 +37,8 @@ impl Config {
         let data_dir =
             PathBuf::from(std::env::var("PEBBLE_DATA_DIR").unwrap_or_else(|_| "/data".to_string()));
 
-        let sync_interval_secs = std::env::var("PEBBLE_SYNC_INTERVAL")
-            .unwrap_or_else(|_| "300".to_string())
-            .parse::<u64>()
-            .map_err(|e| format!("Invalid PEBBLE_SYNC_INTERVAL: {e}"))?;
+        let sync_interval_secs =
+            parse_sync_interval_secs(std::env::var("PEBBLE_SYNC_INTERVAL").ok())?;
 
         let log_retain_days = std::env::var("PEBBLE_LOG_RETAIN_DAYS")
             .unwrap_or_else(|_| "7".to_string())
@@ -49,6 +47,8 @@ impl Config {
 
         let password_hash = crate::auth::hash_password(&password)
             .map_err(|e| format!("Failed to hash password: {e}"))?;
+
+        let public_url = std::env::var("PEBBLE_PUBLIC_URL").ok();
 
         Ok(Self {
             port,
@@ -59,7 +59,7 @@ impl Config {
             log_retain_days,
             google_client_id: std::env::var("GOOGLE_CLIENT_ID").ok(),
             google_client_secret: std::env::var("GOOGLE_CLIENT_SECRET").ok(),
-            public_url: std::env::var("PEBBLE_PUBLIC_URL").ok(),
+            public_url,
         })
     }
 
@@ -94,9 +94,29 @@ fn is_insecure_jwt_secret(secret: &str) -> bool {
     ) || trimmed.len() < 32
 }
 
+fn parse_sync_interval_secs(value: Option<String>) -> Result<u64, String> {
+    value
+        .unwrap_or_else(|| "10".to_string())
+        .parse::<u64>()
+        .map_err(|e| format!("Invalid PEBBLE_SYNC_INTERVAL: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{is_insecure_default_password, is_insecure_jwt_secret};
+    use super::{is_insecure_default_password, is_insecure_jwt_secret, parse_sync_interval_secs};
+
+    #[test]
+    fn sync_interval_defaults_to_ten_seconds() {
+        assert_eq!(parse_sync_interval_secs(None).unwrap(), 10);
+    }
+
+    #[test]
+    fn deploy_script_defaults_sync_interval_to_ten_seconds() {
+        let deploy_script = include_str!("../scripts/deploy.sh");
+
+        assert!(deploy_script.contains("PEBBLE_SYNC_INTERVAL=\"${PEBBLE_SYNC_INTERVAL:-10}\""));
+        assert!(!deploy_script.contains("PEBBLE_SYNC_INTERVAL=\"${PEBBLE_SYNC_INTERVAL:-300}\""));
+    }
 
     #[test]
     fn rejects_documented_placeholder_passwords() {

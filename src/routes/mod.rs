@@ -9,10 +9,12 @@ pub mod folders;
 pub mod health;
 pub mod kanban;
 pub mod labels;
+pub mod magicpush;
 pub mod messages;
 pub mod oauth;
 pub mod rules;
 pub mod search;
+pub mod settings;
 pub mod snooze;
 pub mod sync;
 pub mod threads;
@@ -85,7 +87,10 @@ pub fn build_router(state: AppStateRef, static_dir: &str) -> Router {
             "/api/v1/folders/{folder_id}",
             put(folders::update_folder).delete(folders::delete_folder),
         )
-        .route("/api/v1/folders/{folder_id}/link", post(folders::link_folder))
+        .route(
+            "/api/v1/folders/{folder_id}/link",
+            post(folders::link_folder),
+        )
         .route(
             "/api/v1/folders/{folder_id}/unlink",
             post(folders::unlink_folder),
@@ -192,6 +197,18 @@ pub fn build_router(state: AppStateRef, static_dir: &str) -> Router {
             "/api/v1/translate/test",
             post(translate::test_translate_connection),
         )
+        .route(
+            "/api/v1/settings/general",
+            get(settings::get_general_settings).post(settings::save_general_settings),
+        )
+        .route(
+            "/api/v1/magicpush/config",
+            get(magicpush::get_magicpush_config).post(magicpush::save_magicpush_config),
+        )
+        .route(
+            "/api/v1/magicpush/test",
+            post(magicpush::test_magicpush_connection),
+        )
         // Drafts
         .route("/api/v1/drafts", post(drafts::save_draft))
         .route(
@@ -296,6 +313,8 @@ mod tests {
 
     #[test]
     fn router_builds_with_all_routes() {
+        const TEST_SYNC_INTERVAL_SECS: u64 = 300;
+
         let data_dir =
             std::env::temp_dir().join(format!("pebble-web-router-test-{}", pebble_core::new_id()));
         let static_dir = data_dir.join("static");
@@ -307,7 +326,7 @@ mod tests {
             data_dir: data_dir.clone(),
             password_hash: "test-password-hash".to_string(),
             jwt_secret: "test-jwt-secret-with-at-least-32-chars".to_string(),
-            sync_interval_secs: 300,
+            sync_interval_secs: TEST_SYNC_INTERVAL_SECS,
             log_retain_days: 1,
             google_client_id: None,
             google_client_secret: None,

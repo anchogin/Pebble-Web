@@ -3,8 +3,8 @@ use crate::error::ApiError;
 use crate::state::AppStateRef;
 use axum::{extract::State, Json};
 use pebble_core::new_id;
-use pebble_mail::{ConnectionSecurity, SmtpConfig};
 use pebble_mail::smtp::SmtpSender;
+use pebble_mail::{ConnectionSecurity, SmtpConfig};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
@@ -27,12 +27,15 @@ pub async fn send_email(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Validate attachment paths are within attachments_dir
     if let Some(ref paths) = body.attachment_paths {
-        let allowed_dir = state.attachments_dir.canonicalize().unwrap_or_else(|_| state.attachments_dir.clone());
+        let allowed_dir = state
+            .attachments_dir
+            .canonicalize()
+            .unwrap_or_else(|_| state.attachments_dir.clone());
         for path in paths {
             let p = std::path::Path::new(path);
-            let canonical = p.canonicalize().map_err(|_| {
-                ApiError::BadRequest(format!("Attachment not found: {path}"))
-            })?;
+            let canonical = p
+                .canonicalize()
+                .map_err(|_| ApiError::BadRequest(format!("Attachment not found: {path}")))?;
             if !canonical.starts_with(&allowed_dir) {
                 return Err(ApiError::BadRequest(
                     "Attachment path outside allowed directory".to_string(),
@@ -149,7 +152,10 @@ pub async fn stage_attachment(
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to create staging dir: {e}")))?;
 
-    let safe_filename = body.filename.replace(['/', '\\', ':'], "_").replace("..", "_");
+    let safe_filename = body
+        .filename
+        .replace(['/', '\\', ':'], "_")
+        .replace("..", "_");
     let unique_name = format!("{}_{}", new_id(), safe_filename);
     let file_path = staging_dir.join(&unique_name);
 

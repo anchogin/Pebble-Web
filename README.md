@@ -14,6 +14,7 @@ Pebble Web 是一个可自托管的 Web 邮件客户端，基于桌面端 [Pebbl
 - 标签与看板：自定义标签、邮件任务看板、上下文备注
 - 稍后处理：邮件延后提醒和待处理列表
 - 邮件翻译：支持 DeepLX、DeepL、通用翻译服务和 LLM 翻译配置
+- 新邮件推送：可在设置中配置 MagicPush 推送
 - 隐私保护：默认阻止远程图片，可维护可信发件人
 - 附件管理：上传暂存、下载、内联附件展示
 - 云端配置备份：通过 WebDAV 备份和恢复设置
@@ -132,12 +133,14 @@ npm run dev
 | `PEBBLE_PORT` | 否 | `8080` | 服务端口 |
 | `PEBBLE_DATA_DIR` | 否 | `/data` | 数据目录 |
 | `PEBBLE_STATIC_DIR` | 否 | `./frontend/dist` | 前端静态文件目录 |
-| `PEBBLE_SYNC_INTERVAL` | 否 | `300` | 邮件同步间隔，单位秒 |
+| `PEBBLE_SYNC_INTERVAL` | 否 | `10` | 邮件同步间隔，单位秒 |
 | `PEBBLE_ENCRYPTION_KEY` | 否 | 自动生成 | 32 字节 Hex 编码加密密钥 |
 | `PEBBLE_LOG_RETAIN_DAYS` | 否 | `1` | 日志保留天数 |
 | `GOOGLE_CLIENT_ID` | 否 | 无 | 谷歌Auth登录客户端ID |
 | `GOOGLE_CLIENT_SECRET` | 否 | 无 | 谷歌Auth登录客户端密钥 |
-| `PEBBLE_PUBLIC_URL` | 否 | 无 | Pebble服务器回调地址 |
+| `PEBBLE_PUBLIC_URL` | 否 | 无 | Pebble服务器公开访问地址；首次配置或未设置通用配置时用于 OAuth 回调 |
+
+Pebble 公开访问地址在 Web 界面中配置：进入「设置」→「通用」填写。Google OAuth 回调和 MagicPush 通知链接都会使用这个地址。MagicPush 新邮件推送在「设置」→「推送」中填写 MagicPush 服务地址和 Endpoint Token；Token 会加密保存在本地数据库中。
 
 安全建议：
 

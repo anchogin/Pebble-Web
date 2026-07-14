@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { showTestNotification } from "@/lib/api";
 import { useToastStore } from "@/stores/toast.store";
 import { useUIStore, type RealtimePreference } from "@/stores/ui.store";
+import PublicUrlSettings from "./PublicUrlSettings";
 
 const REALTIME_OPTIONS: Array<{
   mode: RealtimePreference;
@@ -88,6 +89,8 @@ export default function GeneralTab() {
 
   return (
     <div>
+      <PublicUrlSettings />
+
       <h3 style={{ fontSize: "14px", fontWeight: 600, marginBottom: "8px" }}>
         {t("settings.realtimeMode", "Realtime Mode")}
       </h3>

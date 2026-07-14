@@ -160,14 +160,16 @@ export default function Sidebar() {
   // Auto-select the only account. With multiple accounts, null means the
   // combined "all accounts" mailbox.
   useEffect(() => {
+    if (activeView === "message") return;
     if (accounts.length === 1 && !activeAccountId) {
       setActiveAccountId(accounts[0].id);
     }
-  }, [accounts, activeAccountId, setActiveAccountId]);
+  }, [activeView, accounts, activeAccountId, setActiveAccountId]);
 
   // Auto-select inbox folder when folders load.
   // If the selected account has no folders, try the next account.
   useEffect(() => {
+    if (activeView === "message") return;
     if (displayedFolders.length > 0 && !activeFolderId) {
       const inbox = displayedFolders.find((f) => f.role === "inbox");
       setActiveFolderId((inbox ?? displayedFolders[0]).id);
@@ -181,7 +183,7 @@ export default function Sidebar() {
         }
       }
     }
-  }, [displayedFolders, foldersFetched, activeFolderId, setActiveFolderId, accounts, activeAccountId, setActiveAccountId, allAccountsMode]);
+  }, [activeView, displayedFolders, foldersFetched, activeFolderId, setActiveFolderId, accounts, activeAccountId, setActiveAccountId, allAccountsMode]);
 
   async function confirmDiscardDraft() {
     if (isComposeDirty()) {
