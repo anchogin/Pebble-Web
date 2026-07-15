@@ -163,6 +163,7 @@ export default function InboxView() {
                     const counts = await Promise.all(targetAccountIds.map((accountId) => emptyTrash(accountId)));
                     const count = counts.reduce((sum, current) => sum + current, 0);
                     queryClient.invalidateQueries({ queryKey: ["messages"] });
+                    queryClient.invalidateQueries({ queryKey: ["message-count"] });
                     addToast({ message: t("messageActions.emptyTrashSuccess", { count }), type: "success" });
                   } catch {
                     addToast({ message: t("messageActions.emptyTrashFailed"), type: "error" });

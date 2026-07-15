@@ -35,8 +35,6 @@ pub async fn search_messages(
     State(state): State<AppStateRef>,
     Json(body): Json<SearchRequest>,
 ) -> Result<Json<Vec<SearchHit>>, ApiError> {
-    let limit = body.limit.unwrap_or(50);
-
     // Determine if this is a simple search or advanced
     let is_advanced = body.from.is_some()
         || body.to.is_some()
@@ -58,7 +56,7 @@ pub async fn search_messages(
                 body.date_to,
                 body.has_attachment,
                 body.folder_id.as_deref(),
-                limit,
+                body.limit,
             )
             .map_err(|e| ApiError::Internal(format!("Search failed: {e}")))?
     } else {
@@ -68,7 +66,7 @@ pub async fn search_messages(
         }
         state
             .store
-            .search_messages_wide(&query_text, limit)
+            .search_messages_wide(&query_text, body.limit)
             .map_err(|e| ApiError::Internal(format!("Search failed: {e}")))?
     };
 

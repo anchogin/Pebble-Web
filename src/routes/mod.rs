@@ -104,6 +104,10 @@ pub fn build_router(state: AppStateRef, static_dir: &str) -> Router {
             "/api/v1/folders/{folder_id}/messages",
             get(messages::list_messages_by_folder),
         )
+        .route(
+            "/api/v1/folders/{folder_id}/messages/count",
+            get(messages::count_messages_by_folder),
+        )
         .route("/api/v1/messages/{message_id}", get(messages::get_message))
         .route(
             "/api/v1/messages/{message_id}/with-html",

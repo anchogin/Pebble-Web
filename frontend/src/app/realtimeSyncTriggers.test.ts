@@ -23,6 +23,7 @@ describe("realtime sync cache refresh", () => {
     expect(source).toContain('msg.type === "sync_progress"');
     expect(source).toContain('msg.status === "completed"');
     expect(source).toContain('["messages"]');
+    expect(source).toContain('["message-count"]');
     expect(source).toContain('["folders"]');
     expect(source).toContain('["threads"]');
     expect(source).toContain('["folder-unread-counts"]');

@@ -32,6 +32,7 @@ export default function SearchView() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
   const storeSearchQuery = useUIStore((s) => s.searchQuery);
+  const setSearchResultCount = useUIStore((s) => s.setSearchResultCount);
 
   const trimmed = query.trim();
   const filtersActive = hasActiveFilters(filters);
@@ -50,6 +51,14 @@ export default function SearchView() {
     placeholderData: (prev: SearchHit[] | undefined) => prev,
   });
 
+  useEffect(() => {
+    if (searchEnabled) {
+      setSearchResultCount(results.length);
+      return;
+    }
+    setSearchResultCount(0);
+  }, [results.length, searchEnabled, setSearchResultCount]);
+
   const resultsParentRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: results.length,
@@ -64,11 +73,12 @@ export default function SearchView() {
     if (!t && !hasActiveFilters(filters)) {
       setHasSearched(false);
       setSelectedId(null);
+      setSearchResultCount(0);
       return;
     }
     setHasSearched(true);
     setSelectedId(null);
-  }, [query, filters]);
+  }, [query, filters, setSearchResultCount]);
 
   // Pick up context queries from other views and from this view while mounted.
   useEffect(() => {

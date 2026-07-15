@@ -1,11 +1,14 @@
-import { useInfiniteQuery, type InfiniteData, type QueryClient } from "@tanstack/react-query";
-import { listMessages } from "@/lib/api";
+import { useInfiniteQuery, useQuery, type InfiniteData, type QueryClient } from "@tanstack/react-query";
+import { getMessageCount, listMessages } from "@/lib/api";
 import type { MessageSummary } from "@/lib/api";
 
 export const MESSAGES_PAGE_SIZE = 50;
 
 export const messagesQueryKey = (folderId: string, folderIds?: string[]) =>
   ["messages", folderId, folderIds] as const;
+
+export const messageCountQueryKey = (folderId: string, folderIds?: string[]) =>
+  ["message-count", folderId, folderIds] as const;
 
 /**
  * Paginated message list backed by React Query's useInfiniteQuery.
@@ -35,6 +38,18 @@ export function useMessagesQuery(
     isFetchingNextPage: query.isFetchingNextPage,
     fetchNextPage: query.fetchNextPage,
   };
+}
+
+export function useMessageCountQuery(
+  folderId: string | null,
+  folderIds?: string[],
+) {
+  return useQuery({
+    queryKey: messageCountQueryKey(folderId ?? "", folderIds),
+    queryFn: () => getMessageCount(folderId!, folderIds),
+    enabled: !!folderId,
+    staleTime: 30_000,
+  });
 }
 
 export type MessagesInfiniteData = InfiniteData<MessageSummary[], number>;

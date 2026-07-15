@@ -38,6 +38,7 @@ export default function MessageActionToolbar({
 
   function invalidateMessageViews(includeUnreadCounts = false) {
     queryClient.invalidateQueries({ queryKey: ["messages"] });
+    queryClient.invalidateQueries({ queryKey: ["message-count"] });
     queryClient.invalidateQueries({ queryKey: ["threads"] });
     if (includeUnreadCounts) {
       queryClient.invalidateQueries({ queryKey: ["folder-unread-counts"] });

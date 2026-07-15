@@ -118,6 +118,7 @@ export default function MessageList({
 
   function invalidateMessageViews() {
     queryClient.invalidateQueries({ queryKey: ["messages"] });
+    queryClient.invalidateQueries({ queryKey: ["message-count"] });
     queryClient.invalidateQueries({ queryKey: ["threads"] });
     queryClient.invalidateQueries({ queryKey: ["starred-messages"] });
   }

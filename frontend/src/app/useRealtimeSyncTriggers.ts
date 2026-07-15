@@ -16,6 +16,7 @@ export function useRealtimeSyncTriggers() {
 
       if (shouldRefresh) {
         queryClient.invalidateQueries({ queryKey: ["messages"] });
+        queryClient.invalidateQueries({ queryKey: ["message-count"] });
         queryClient.invalidateQueries({ queryKey: ["folders"] });
         queryClient.invalidateQueries({ queryKey: ["threads"] });
         queryClient.invalidateQueries({ queryKey: ["folder-unread-counts"] });

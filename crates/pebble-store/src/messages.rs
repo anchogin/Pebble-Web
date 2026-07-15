@@ -444,6 +444,41 @@ impl Store {
         })
     }
 
+    pub fn count_messages_by_folders(&self, folder_ids: &[String]) -> Result<u32> {
+        if folder_ids.is_empty() {
+            return Ok(0);
+        }
+        if folder_ids.len() == 1 {
+            return self.with_read(|conn| {
+                let count = conn.query_row(
+                    "SELECT COUNT(*) FROM messages m
+                     JOIN message_folders mf ON m.id = mf.message_id
+                     WHERE mf.folder_id = ?1 AND m.is_deleted = 0",
+                    params![folder_ids[0]],
+                    |row| row.get::<_, u32>(0),
+                )?;
+                Ok(count)
+            });
+        }
+
+        self.with_read(|conn| {
+            let placeholders: Vec<String> =
+                (1..=folder_ids.len()).map(|i| format!("?{}", i)).collect();
+            let sql = format!(
+                "SELECT COUNT(DISTINCT m.id) FROM messages m
+                 JOIN message_folders mf ON m.id = mf.message_id
+                 WHERE mf.folder_id IN ({}) AND m.is_deleted = 0",
+                placeholders.join(", "),
+            );
+            let params_ref: Vec<&dyn rusqlite::types::ToSql> = folder_ids
+                .iter()
+                .map(|folder_id| folder_id as &dyn rusqlite::types::ToSql)
+                .collect();
+            let count = conn.query_row(&sql, params_ref.as_slice(), |row| row.get::<_, u32>(0))?;
+            Ok(count)
+        })
+    }
+
     pub fn get_message(&self, id: &str) -> Result<Option<Message>> {
         self.with_read(|conn| {
             let sql = format!("SELECT {MSG_SELECT} FROM messages WHERE id = ?1");
@@ -1343,14 +1378,18 @@ impl Store {
         })
     }
 
-    pub fn search_messages_wide(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>> {
+    pub fn search_messages_wide(
+        &self,
+        query: &str,
+        limit: Option<usize>,
+    ) -> Result<Vec<SearchHit>> {
         let term = query.trim();
         if term.is_empty() {
             return Ok(Vec::new());
         }
         let pattern = format!("%{}%", term.to_lowercase());
         self.with_read(|conn| {
-            let mut stmt = conn.prepare(
+            let mut sql = String::from(
                 "SELECT id, subject, snippet, from_address, body_text, date
                  FROM messages
                  WHERE is_deleted = 0
@@ -1368,10 +1407,18 @@ impl Store {
                     OR lower(COALESCE(in_reply_to, '')) LIKE ?1
                     OR lower(COALESCE(references_header, '')) LIKE ?1
                    )
-                 ORDER BY date DESC
-                 LIMIT ?2",
-            )?;
-            let rows = stmt.query_map(params![pattern, limit as u32], |row| {
+                 ORDER BY date DESC",
+            );
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(pattern)];
+            if let Some(limit) = limit {
+                params.push(Box::new(limit as u32));
+                let limit_index = params.len();
+                sql.push_str(&format!(" LIMIT ?{limit_index}"));
+            }
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|param| param.as_ref()).collect();
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(param_refs), |row| {
                 let subject: String = row.get(1)?;
                 let snippet: String = row.get(2)?;
                 let body_text: String = row.get(4)?;
@@ -1410,7 +1457,7 @@ impl Store {
         date_to: Option<i64>,
         has_attachment: Option<bool>,
         folder_id: Option<&str>,
-        limit: usize,
+        limit: Option<usize>,
     ) -> Result<Vec<SearchHit>> {
         let text = text.map(str::trim).filter(|value| !value.is_empty());
         let from = from.map(str::trim).filter(|value| !value.is_empty());
@@ -1489,9 +1536,12 @@ impl Store {
                 let index = params.len();
                 sql.push_str(&format!(" AND mf.folder_id = ?{index}"));
             }
-            params.push(Box::new(limit as u32));
-            let limit_index = params.len();
-            sql.push_str(&format!(" ORDER BY m.date DESC LIMIT ?{limit_index}"));
+            sql.push_str(" ORDER BY m.date DESC");
+            if let Some(limit) = limit {
+                params.push(Box::new(limit as u32));
+                let limit_index = params.len();
+                sql.push_str(&format!(" LIMIT ?{limit_index}"));
+            }
 
             let param_refs: Vec<&dyn rusqlite::types::ToSql> =
                 params.iter().map(|param| param.as_ref()).collect();
@@ -2092,6 +2142,120 @@ mod thread_listing_tests {
     }
 
     #[test]
+    fn count_messages_by_folders_returns_single_folder_total() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, inbox_id) = seed_account_and_folder(&store);
+        let msg_one = make_msg(&account_id, &new_id(), "one@example.com", 100);
+        let msg_two = make_msg(&account_id, &new_id(), "two@example.com", 200);
+        store
+            .insert_message(&msg_one, std::slice::from_ref(&inbox_id))
+            .unwrap();
+        store
+            .insert_message(&msg_two, std::slice::from_ref(&inbox_id))
+            .unwrap();
+
+        assert_eq!(store.count_messages_by_folders(&[inbox_id]).unwrap(), 2);
+    }
+
+    #[test]
+    fn count_messages_by_folders_returns_multi_folder_total_across_accounts() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_one, inbox_one) = seed_account_and_folder(&store);
+        let account_two = new_id();
+        store
+            .insert_account(&Account {
+                id: account_two.clone(),
+                email: "two@example.com".to_string(),
+                display_name: "Two".to_string(),
+                color: None,
+                provider: ProviderType::Imap,
+                created_at: now_timestamp(),
+                updated_at: now_timestamp(),
+            })
+            .unwrap();
+        let inbox_two = Folder {
+            id: new_id(),
+            account_id: account_two.clone(),
+            remote_id: "INBOX".to_string(),
+            name: "Inbox".to_string(),
+            folder_type: FolderType::Folder,
+            role: Some(FolderRole::Inbox),
+            parent_id: None,
+            color: None,
+            is_system: true,
+            server_linked: true,
+            sort_order: 0,
+        };
+        store.insert_folder(&inbox_two).unwrap();
+
+        let msg_one = make_msg(&account_one, &new_id(), "one@example.com", 100);
+        let msg_two = make_msg(&account_two, &new_id(), "two@example.com", 200);
+        store
+            .insert_message(&msg_one, std::slice::from_ref(&inbox_one))
+            .unwrap();
+        store
+            .insert_message(&msg_two, std::slice::from_ref(&inbox_two.id))
+            .unwrap();
+
+        assert_eq!(
+            store
+                .count_messages_by_folders(&[inbox_one, inbox_two.id])
+                .unwrap(),
+            2,
+        );
+    }
+
+    #[test]
+    fn count_messages_by_folders_counts_message_in_multiple_selected_folders_once() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, inbox_id) = seed_account_and_folder(&store);
+        let archive = Folder {
+            id: new_id(),
+            account_id: account_id.clone(),
+            remote_id: "Archive".to_string(),
+            name: "Archive".to_string(),
+            folder_type: FolderType::Folder,
+            role: Some(FolderRole::Archive),
+            parent_id: None,
+            color: None,
+            is_system: true,
+            server_linked: true,
+            sort_order: 1,
+        };
+        store.insert_folder(&archive).unwrap();
+
+        let msg = make_msg(&account_id, &new_id(), "one@example.com", 100);
+        store
+            .insert_message(&msg, &[inbox_id.clone(), archive.id.clone()])
+            .unwrap();
+
+        assert_eq!(
+            store
+                .count_messages_by_folders(&[inbox_id, archive.id])
+                .unwrap(),
+            1,
+        );
+    }
+
+    #[test]
+    fn count_messages_by_folders_excludes_deleted_messages() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, inbox_id) = seed_account_and_folder(&store);
+        let visible = make_msg(&account_id, &new_id(), "one@example.com", 100);
+        let mut deleted = make_msg(&account_id, &new_id(), "two@example.com", 200);
+        deleted.is_deleted = true;
+        deleted.deleted_at = Some(now_timestamp());
+        store
+            .insert_message(&visible, std::slice::from_ref(&inbox_id))
+            .unwrap();
+        store
+            .insert_message(&deleted, std::slice::from_ref(&inbox_id))
+            .unwrap();
+
+        assert_eq!(store.count_messages_by_folders(&[inbox_id]).unwrap(), 1);
+    }
+
+    #[test]
     fn search_messages_wide_matches_subject_body_and_addresses() {
         let store = Store::open_in_memory().unwrap();
         let (account_id, inbox_id) = seed_account_and_folder(&store);
@@ -2129,7 +2293,7 @@ mod thread_listing_tests {
             .insert_message(&address_msg, std::slice::from_ref(&inbox_id))
             .unwrap();
 
-        let hits = store.search_messages_wide("你好", 10).unwrap();
+        let hits = store.search_messages_wide("你好", Some(10)).unwrap();
         let ids: Vec<_> = hits.into_iter().map(|hit| hit.message_id).collect();
         assert_eq!(ids, vec!["subject-hit", "body-hit", "address-hit"]);
 
@@ -2140,7 +2304,7 @@ mod thread_listing_tests {
             "reply-unique",
             "reference-unique",
         ] {
-            let hits = store.search_messages_wide(term, 10).unwrap();
+            let hits = store.search_messages_wide(term, Some(10)).unwrap();
             let ids: Vec<_> = hits.into_iter().map(|hit| hit.message_id).collect();
             assert_eq!(
                 ids,
@@ -2176,11 +2340,81 @@ mod thread_listing_tests {
                 None,
                 None,
                 None,
-                10,
+                Some(10),
             )
             .unwrap();
 
         let ids: Vec<_> = hits.into_iter().map(|hit| hit.message_id).collect();
         assert_eq!(ids, vec!["new-in-range"]);
+    }
+
+    #[test]
+    fn search_messages_wide_without_limit_returns_all_matches() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, inbox_id) = seed_account_and_folder(&store);
+
+        for index in 0..60 {
+            let mut msg = make_msg(&account_id, &new_id(), "sender@example.com", 1_000 + index);
+            msg.id = format!("bulk-hit-{index:02}");
+            msg.subject = "bulk-search-match".to_string();
+            store
+                .insert_message(&msg, std::slice::from_ref(&inbox_id))
+                .unwrap();
+        }
+
+        let all_hits = store
+            .search_messages_wide("bulk-search-match", None)
+            .unwrap();
+        assert_eq!(all_hits.len(), 60);
+
+        let limited_hits = store
+            .search_messages_wide("bulk-search-match", Some(10))
+            .unwrap();
+        assert_eq!(limited_hits.len(), 10);
+    }
+
+    #[test]
+    fn advanced_search_messages_without_limit_returns_all_matches() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, inbox_id) = seed_account_and_folder(&store);
+
+        for index in 0..60 {
+            let mut msg = make_msg(&account_id, &new_id(), "sender@example.com", 1_000 + index);
+            msg.id = format!("advanced-hit-{index:02}");
+            msg.subject = "bulk-advanced-match".to_string();
+            store
+                .insert_message(&msg, std::slice::from_ref(&inbox_id))
+                .unwrap();
+        }
+
+        let all_hits = store
+            .advanced_search_messages(
+                Some("bulk-advanced-match"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(all_hits.len(), 60);
+
+        let limited_hits = store
+            .advanced_search_messages(
+                Some("bulk-advanced-match"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(10),
+            )
+            .unwrap();
+        assert_eq!(limited_hits.len(), 10);
     }
 }

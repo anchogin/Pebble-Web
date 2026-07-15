@@ -110,12 +110,14 @@ export function buildCommands(t: (key: string, defaultValue: string) => string):
           const result = await archiveMessage(id);
           if (result === "skipped") return;
           queryClient.invalidateQueries({ queryKey: ["messages"] });
+          queryClient.invalidateQueries({ queryKey: ["message-count"] });
           queryClient.invalidateQueries({ queryKey: ["threads"] });
           queryClient.invalidateQueries({ queryKey: ["folder-unread-counts"] });
           const msg = result === "unarchived" ? t("messageActions.unarchiveSuccess", "Message moved to inbox") : t("messageActions.archiveSuccess", "Message archived");
           useToastStore.getState().addToast({ message: msg, type: "success" });
         } catch {
           queryClient.invalidateQueries({ queryKey: ["messages"] });
+          queryClient.invalidateQueries({ queryKey: ["message-count"] });
           useToastStore.getState().addToast({ message: t("messageActions.archiveFailed", "Failed to archive"), type: "error" });
         }
       },

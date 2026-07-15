@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { AlertCircle, AppWindow, Clock, RefreshCw } from "lucide-react";
@@ -9,8 +9,11 @@ import { stopSync } from "@/lib/api";
 import { useSyncMutation } from "@/hooks/mutations/useSyncMutation";
 import {
   useAccountsQuery,
+  useFoldersForAccountsQuery,
+  useMessageCountQuery,
   usePendingMailOpsSummary,
 } from "@/hooks/queries";
+import { folderIdsForSelection } from "@/lib/folderAggregation";
 
 interface SyncAccount {
   id: string;
@@ -28,13 +31,27 @@ export default function StatusBar() {
   const notificationsEnabled = useUIStore((s) => s.notificationsEnabled);
   const keepRunningInBackground = useUIStore((s) => s.keepRunningInBackground);
   const setKeepRunningInBackground = useUIStore((s) => s.setKeepRunningInBackground);
+  const sidebarCollapsed = useUIStore((s) => s.sidebarCollapsed);
+  const activeView = useUIStore((s) => s.activeView);
+  const searchResultCount = useUIStore((s) => s.searchResultCount);
   const activeAccountId = useMailStore((s) => s.activeAccountId);
+  const activeFolderId = useMailStore((s) => s.activeFolderId);
   const syncMutation = useSyncMutation();
   const queryClient = useQueryClient();
   const { data: accounts = EMPTY_ACCOUNTS } = useAccountsQuery();
   const { data: pendingOpsSummary } = usePendingMailOpsSummary(activeAccountId);
   const syncStatusRef = useRef(syncStatus);
   const syncAccountIds = activeAccountId ? [activeAccountId] : accounts.map((account) => account.id);
+  const folderAccountIds = useMemo(
+    () => activeAccountId ? [activeAccountId] : accounts.map((account) => account.id),
+    [accounts, activeAccountId],
+  );
+  const { data: folders = [] } = useFoldersForAccountsQuery(folderAccountIds);
+  const selectedFolderIds = folderIdsForSelection(activeFolderId, folders);
+  const queryFolderId = selectedFolderIds[0] ?? null;
+  const queryFolderIds = selectedFolderIds.length > 1 ? selectedFolderIds : undefined;
+  const { data: messageCount } = useMessageCountQuery(queryFolderId, queryFolderIds);
+  const displayedMessageTotal = activeView === "search" ? searchResultCount : messageCount?.total;
 
   useEffect(() => {
     syncStatusRef.current = syncStatus;
@@ -60,6 +77,7 @@ export default function StatusBar() {
         updateSyncStatus("idle");
         queryClient.invalidateQueries({ queryKey: ["folders"] });
         queryClient.invalidateQueries({ queryKey: ["messages"] });
+        queryClient.invalidateQueries({ queryKey: ["message-count"] });
         queryClient.invalidateQueries({ queryKey: ["threads"] });
         queryClient.invalidateQueries({ queryKey: ["folder-unread-counts"] });
       } catch {
@@ -95,8 +113,26 @@ export default function StatusBar() {
         backgroundColor: "var(--color-statusbar-bg)",
         borderColor: "var(--color-border)",
         color: "var(--color-text-secondary)",
+        position: "relative",
       }}
     >
+      {displayedMessageTotal !== undefined && (
+        <span
+          aria-label={t("status.messageTotal", "{{count}} messages", { count: displayedMessageTotal })}
+          title={t("status.messageTotal", "{{count}} messages", { count: displayedMessageTotal })}
+          className="truncate"
+          style={{
+            position: "absolute",
+            left: sidebarCollapsed ? "48px" : "200px",
+            maxWidth: "160px",
+            paddingRight: "12px",
+            color: "var(--color-text-secondary)",
+            pointerEvents: "none",
+          }}
+        >
+          {t("status.messageTotal", "{{count}} messages", { count: displayedMessageTotal })}
+        </span>
+      )}
       {networkStatus === "offline" ? (
         <span
           role="status"

@@ -171,6 +171,7 @@ export function useKeyboard() {
               .then((result) => {
                 if (result === "skipped") return;
                 queryClient.invalidateQueries({ queryKey: ["messages"] });
+                queryClient.invalidateQueries({ queryKey: ["message-count"] });
                 queryClient.invalidateQueries({ queryKey: ["threads"] });
                 queryClient.invalidateQueries({ queryKey: ["folder-unread-counts"] });
                 const msg = result === "unarchived" ? i18n.t("messageActions.unarchiveSuccess", "Message moved to inbox") : i18n.t("messageActions.archiveSuccess", "Message archived");
@@ -178,6 +179,7 @@ export function useKeyboard() {
               })
               .catch(() => {
                 queryClient.invalidateQueries({ queryKey: ["messages"] });
+                queryClient.invalidateQueries({ queryKey: ["message-count"] });
                 useMailStore.getState().setSelectedMessage(selectedMessageId);
                 useToastStore.getState().addToast({ message: i18n.t("messageActions.archiveFailed", "Failed to archive"), type: "error" });
               });

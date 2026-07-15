@@ -363,6 +363,7 @@
     "remoteWritesRetrying": "{{count}} 个远程写入正在重试",
     "remoteWritesPending": "{{count}} 个远程写入待处理",
     "remoteWritesQueued": "{{count}} 个远程写入已排队",
+    "messageTotal": "{{count}} 封邮件",
     "syncNow": "立即同步",
     "stopSync": "停止同步",
     "keepRunningInBackground": "关闭时保持后台运行",

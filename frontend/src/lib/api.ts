@@ -320,6 +320,20 @@ export async function listMessages(
   return res.data;
 }
 
+export interface MessageCountResponse {
+  total: number;
+}
+
+export async function getMessageCount(
+  folderId: string,
+  folderIds?: string[],
+): Promise<MessageCountResponse> {
+  const res = await api.get<MessageCountResponse>(`/folders/${folderId}/messages/count`, {
+    params: { folderIds: folderIds?.join(",") },
+  });
+  return res.data;
+}
+
 export async function listStarredMessages(
   accountId: string,
   limit: number,

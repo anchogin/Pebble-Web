@@ -161,6 +161,8 @@ interface UIState {
   setPollInterval: (secs: number) => void;
   searchQuery: string;
   setSearchQuery: (q: string) => void;
+  searchResultCount: number;
+  setSearchResultCount: (count: number) => void;
   settingsTab: SettingsTab;
   setSettingsTab: (tab: SettingsTab) => void;
   pendingRuleDraftText: string | null;
@@ -303,6 +305,8 @@ export const useUIStore = create<UIState>((set) => ({
   },
   searchQuery: "",
   setSearchQuery: (q) => set({ searchQuery: q }),
+  searchResultCount: 0,
+  setSearchResultCount: (count) => set({ searchResultCount: count }),
   settingsTab: (sessionStorage.getItem("pebble-settings-tab") as SettingsTab) || "accounts",
   setSettingsTab: (tab) => {
     sessionStorage.setItem("pebble-settings-tab", tab);

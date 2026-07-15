@@ -2,7 +2,9 @@ export { useAccountsQuery, accountsQueryKey } from "./useAccountsQuery";
 export { useFoldersForAccountsQuery, useFoldersQuery, foldersQueryKey } from "./useFoldersQuery";
 export {
   useMessagesQuery,
+  useMessageCountQuery,
   messagesQueryKey,
+  messageCountQueryKey,
   patchMessagesCache,
   findCachedMessage,
   readFirstCachedMessages,

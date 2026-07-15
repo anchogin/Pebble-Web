@@ -363,6 +363,7 @@
     "remoteWritesRetrying": "{{count}} remote writes retrying",
     "remoteWritesPending": "{{count}} remote writes pending",
     "remoteWritesQueued": "{{count}} remote writes queued",
+    "messageTotal": "{{count}} messages",
     "syncNow": "Sync now",
     "stopSync": "Stop sync",
     "keepRunningInBackground": "Keep running in background on close",

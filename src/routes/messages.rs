@@ -7,7 +7,7 @@ use axum::{
 use lol_html::{element, HtmlRewriter, Settings};
 use pebble_core::{Message, MessageSummary, PrivacyMode, RenderedHtml};
 use rusqlite::OptionalExtension;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 #[derive(Deserialize)]
@@ -42,6 +42,11 @@ impl ListMessagesParams {
     }
 }
 
+#[derive(Serialize)]
+pub struct MessageCountResponse {
+    pub total: u32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -72,6 +77,13 @@ mod tests {
 
         assert_eq!(params.selected_folder_ids("fallback"), vec!["f2", "f3"]);
     }
+
+    #[test]
+    fn message_count_response_serializes_total() {
+        let response = MessageCountResponse { total: 42 };
+
+        assert_eq!(serde_json::to_value(response).unwrap(), json!({ "total": 42 }));
+    }
 }
 
 pub async fn list_messages_by_folder(
@@ -89,6 +101,21 @@ pub async fn list_messages_by_folder(
         .map_err(|e| ApiError::Internal(format!("Failed to list messages: {e}")))?;
 
     Ok(Json(messages))
+}
+
+pub async fn count_messages_by_folder(
+    State(state): State<AppStateRef>,
+    Path(folder_id): Path<String>,
+    Query(params): Query<ListMessagesParams>,
+) -> Result<Json<MessageCountResponse>, ApiError> {
+    let folder_ids = params.selected_folder_ids(&folder_id);
+    let store = state.store.clone();
+
+    let total = store
+        .count_messages_by_folders(&folder_ids)
+        .map_err(|e| ApiError::Internal(format!("Failed to count messages: {e}")))?;
+
+    Ok(Json(MessageCountResponse { total }))
 }
 
 pub async fn get_message(
